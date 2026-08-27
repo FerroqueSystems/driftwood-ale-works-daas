@@ -1,0 +1,53 @@
+subscription_id             = "00000000-0000-0000-0000-000000000000"
+location                    = "canadacentral"
+build_resource_group_name   = "rg-clickops-gitops-foundation-demo"
+gallery_resource_group_name = "rg-clickops-gitops-foundation-demo"
+gallery_name                = "cgclickopsdemo"
+gallery_image_name          = "win11-25h2-cvad"
+gallery_image_version       = "1.0.0"
+
+# Review publisher / offer / sku in Azure before first build.
+azure_imgpublisher = "MicrosoftWindowsDesktop"
+azure_imgoffer     = "windows-11"
+azure_imgsku       = "win11-25h2-pro"
+azure_imgversion   = "latest"
+
+install_chocolatey_packages = false
+chocolatey_packages         = []
+
+install_m365_apps = false
+m365_apps_odt_url = ""
+# m365_apps_config_xml defaults to Microsoft 365 Apps for enterprise (64-bit,
+# Current channel) with SharedComputerLicensing enabled for multi-user
+# activation on shared Citrix/RDS hosts. Override only if you need different
+# products, languages, or channel.
+
+install_citrix_vda        = false
+citrix_vda_installer_url  = ""
+citrix_vda_installer_args = ""
+
+# Upload the Cloudpaging Player installer to private artifact storage and use
+# the silent install arguments documented for the supplied Player release.
+install_cloudpaging_player        = false
+cloudpaging_player_installer_url  = ""
+cloudpaging_player_installer_args = ""
+
+run_citrix_optimizer           = false
+citrix_optimizer_zip_url       = ""
+citrix_optimizer_template_name = "Citrix_Windows_11_2009.xml"
+
+prepare_for_citrix_mcs = true
+
+# Optional local admin account baked into the image for break-glass Bastion
+# RDP access (AzureAD-joined VDAs otherwise rely solely on Entra ID native
+# RDP over Bastion - see modules/citrix/README.md). Leave username empty to
+# skip creating one. local_admin_password is sensitive - set via a CI
+# secret / environment variable in practice, never commit a real value.
+local_admin_username = ""
+local_admin_password = ""
+
+managed_image_tags = {
+  Environment = "demo"
+  Role        = "golden-image"
+  OS          = "windows-11"
+}

@@ -1,0 +1,38 @@
+name: terraform
+
+on:
+  pull_request:
+    paths:
+      - "environments/**"
+      - "modules/**"
+  workflow_dispatch: {}
+
+jobs:
+  fmt-validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: environments/citrix-azure
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive ../../
+
+      - name: terraform init (no backend)
+        run: terraform init -backend=false
+
+      - name: terraform validate
+        run: terraform validate
+
+  # `terraform plan` needs CITRIX_CLIENT_SECRET, ARM_* credentials, and a real
+  # backend configured as repo/environment secrets. Wire this up once the
+  # Azure and Citrix Cloud credentials from today's meetings are in hand.
+  # plan:
+  #   needs: fmt-validate
+  #   runs-on: ubuntu-latest
+  #   ...

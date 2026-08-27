@@ -1,0 +1,391 @@
+name: citrix-image-rotation
+
+# Monthly Patch-Tuesday golden image / machine catalog rotation. Manually
+# triggered after Patch Tuesday's updates are ready - not scheduled. "build"
+# refuses to stage a brand new label once
+# environments/citrix-azure/rotation.auto.tfvars.json already has
+# --max-entries entries (default 5, a soft guardrail against unbounded
+# catalog sprawl - tune it as the team's build cadence changes) - see
+# scripts/rotate_image_versions.py and modules/citrix/README.md. cutover and
+# decommission aren't limited by this and can target any staged label.
+#
+# - build: unattended. Publishes a new Packer image version and stages a new
+#   machine catalog (machine_count 0 - provisioned but not serving sessions).
+# - cutover: gated behind the "citrix-cutover-approval" environment (add a
+#   required reviewer to it in repo Settings > Environments). Reassigns
+#   desktops from the outgoing catalog to the new one.
+# - decommission: gated behind "citrix-decommission-approval". Deletes the
+#   fully-drained outgoing catalog/image version, both the Citrix-side
+#   machine catalog/image version and the underlying Azure Compute Gallery
+#   image version Packer published (citrix_image_version only references
+#   that by pointer - terraform apply alone never deletes it).
+# - apply: gated behind "citrix-cutover-approval". Plain `terraform apply`
+#   with no rotation.auto.tfvars.json change - for delivery-group config
+#   (published desktop name, restricted access, autoscale schedule) that
+#   isn't part of the monthly rotation state machine and has no other
+#   in-CI path to get applied.
+#
+# This workflow needs the full non-secret environment config (everything in
+# terraform.tfvars.example) and the Packer build vars (everything in
+# packer/images/win11-azure.pkrvars.hcl.example) available in CI, since both
+# files are gitignored/local-only. Rather than wiring dozens of individual
+# repo variables, it decodes two JSON secrets - TERRAFORM_TFVARS_JSON and
+# PACKER_BUILD_VARS_JSON - into gitignored *.auto.tfvars.json /
+# *.auto.pkrvars.json files at runtime. See the top-level README's secrets
+# list for what each must contain.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Rotation step to run"
+        required: true
+        type: choice
+        options: [build, cutover, decommission, apply]
+      image_label:
+        description: 'Build label in "YYMM-N" form, e.g. "2607-1" (the label being built, cut over to, or decommissioned). Ignored by "apply" - put anything, e.g. the current live label.'
+        required: true
+      old_image_label:
+        description: "cutover only: the outgoing build label to phase out (leave blank if this is the first-ever catalog)"
+        required: false
+      total_machines:
+        description: "build only: number of machines to provision in the new catalog"
+        required: false
+      machine_count:
+        description: "cutover only: number of machines to assign to the new catalog in the delivery group"
+        required: false
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  TF_WORKDIR: environments/citrix-azure
+  ROTATION_FILE: environments/citrix-azure/rotation.auto.tfvars.json
+
+jobs:
+  build:
+    if: inputs.action == 'build'
+    runs-on: ubuntu-latest
+    environment: techops-monthly-daas
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - name: Compute Azure Compute Gallery version from the build label
+        id: version
+        run: |
+          IFS='-' read -r ym n <<< "${{ inputs.image_label }}"
+          echo "gallery_version=${ym}.${n}.0" >> "$GITHUB_OUTPUT"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Write Terraform vars
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+
+      # Packer only publishes a new image *version* into an already-existing
+      # Shared Image Gallery/image definition (module.image_gallery) - it
+      # never creates them. Apply first so those exist before the build, which
+      # matters on a first-ever build where nothing has been applied yet.
+      # Scoped to just module.image_gallery (not a full apply) because
+      # var.image_versions may already have this build's label staged from
+      # rotation.auto.tfvars.json (committed by a previous run of this same
+      # workflow) - an untargeted apply here would try to create
+      # citrix_image_version for a gallery image Packer hasn't published yet.
+      - name: terraform apply (ensure prerequisites exist before the image build)
+        working-directory: ${{ env.TF_WORKDIR }}
+        env:
+          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+        run: |
+          terraform init
+          terraform apply -auto-approve -target=module.image_gallery
+
+      - uses: hashicorp/setup-packer@main
+        with:
+          version: latest
+
+      - name: Write Packer build vars
+        working-directory: packer/images
+        run: echo '${{ secrets.PACKER_BUILD_VARS_JSON }}' > ci.auto.pkrvars.json
+
+      # Re-running "build" (e.g. to retry a later step after Packer already
+      # succeeded) would otherwise always fail here - Packer refuses to
+      # publish a gallery image version that already exists rather than
+      # silently treating it as done. Skip the ~15-20 minute rebuild if this
+      # exact version is already published.
+      - name: Check whether this image version was already published
+        id: image_check
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: |
+          rg=$(python3 -c "import json; print(json.load(open('ci.auto.tfvars.json'))['resource_group_name'])")
+          gallery=$(python3 -c "import json; print(json.load(open('ci.auto.tfvars.json'))['gallery_name'])")
+          definition=$(python3 -c "import json; print(json.load(open('ci.auto.tfvars.json'))['image_definition_name'])")
+          if az sig image-version show --resource-group "$rg" --gallery-name "$gallery" \
+              --gallery-image-definition "$definition" \
+              --gallery-image-version "${{ steps.version.outputs.gallery_version }}" \
+              --query id -o tsv 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the golden image
+        if: steps.image_check.outputs.exists != 'true'
+        working-directory: packer/images
+        env:
+          LOCAL_ADMIN_USERNAME: ${{ secrets.VDA_LOCAL_ADMIN_USERNAME }}
+          LOCAL_ADMIN_PASSWORD: ${{ secrets.VDA_LOCAL_ADMIN_PASSWORD }}
+        run: |
+          packer init azure-windows-base.pkr.hcl
+          packer build \
+            -var-file=ci.auto.pkrvars.json \
+            -var "gallery_image_version=${{ steps.version.outputs.gallery_version }}" \
+            -var "local_admin_username=$LOCAL_ADMIN_USERNAME" \
+            -var "local_admin_password=$LOCAL_ADMIN_PASSWORD" \
+            azure-windows-base.pkr.hcl
+
+      - name: Stage the new machine catalog (machine_count 0)
+        run: |
+          naming_scheme=$(python3 -c "import json; print(json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))['citrix_machine_naming_scheme'])")
+          catalog_name_prefix=$(python3 -c "import json; print(json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))['citrix_catalog_name_prefix'])")
+          python3 scripts/rotate_image_versions.py "$ROTATION_FILE" build \
+            --label "${{ inputs.image_label }}" \
+            --gallery-version "${{ steps.version.outputs.gallery_version }}" \
+            --total-machines "${{ inputs.total_machines }}" \
+            --naming-scheme "$naming_scheme" \
+            --catalog-name-prefix "$catalog_name_prefix"
+
+      - name: Commit the rotation state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$ROTATION_FILE"
+          if git diff --staged --quiet; then
+            echo "No changes to $ROTATION_FILE, skipping commit"
+          else
+            git commit -m "citrix-image-rotation: stage build ${{ inputs.image_label }}"
+            git pull --rebase
+            git push
+          fi
+
+      # Scoped to just this label's image_version/machine_catalog - an
+      # untargeted apply here would also update citrix_delivery_group's
+      # associated_machine_catalogs to add the new label at its staged
+      # machine_count = 0, which Citrix rejects ("machine_count of the
+      # associated catalog cannot be less than 1") since it's a brand new
+      # association, not a drain of an existing one. The delivery group only
+      # picks up the new catalog at cutover, once machine_count is >= 1.
+      - name: terraform apply (create the machine catalog for the new image version)
+        working-directory: ${{ env.TF_WORKDIR }}
+        env:
+          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+        run: |
+          terraform apply -auto-approve \
+            -target="module.citrix.citrix_image_version.vda[\"${{ inputs.image_label }}\"]" \
+            -target="module.citrix.citrix_machine_catalog.vda[\"${{ inputs.image_label }}\"]"
+
+  cutover:
+    if: inputs.action == 'cutover'
+    runs-on: ubuntu-latest
+    environment: citrix-cutover-approval
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cut the delivery group over to the new catalog
+        run: |
+          python3 scripts/rotate_image_versions.py "$ROTATION_FILE" cutover \
+            --new-label "${{ inputs.image_label }}" \
+            --machine-count "${{ inputs.machine_count }}" \
+            ${{ inputs.old_image_label != '' && format('--old-label {0}', inputs.old_image_label) || '' }}
+
+      - name: Commit the rotation state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$ROTATION_FILE"
+          if git diff --staged --quiet; then
+            echo "No changes to $ROTATION_FILE, skipping commit"
+          else
+            git commit -m "citrix-image-rotation: cut over to ${{ inputs.image_label }}"
+            git pull --rebase
+            git push
+          fi
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Write Terraform vars
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+
+      - name: terraform apply
+        working-directory: ${{ env.TF_WORKDIR }}
+        env:
+          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+        run: |
+          terraform init
+          terraform apply -auto-approve
+
+  decommission:
+    if: inputs.action == 'decommission'
+    runs-on: ubuntu-latest
+    environment: citrix-decommission-approval
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Remove the drained catalog/image version from the rotation state
+        run: |
+          python3 scripts/rotate_image_versions.py "$ROTATION_FILE" decommission \
+            --label "${{ inputs.image_label }}"
+
+      - name: Commit the rotation state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$ROTATION_FILE"
+          if git diff --staged --quiet; then
+            echo "No changes to $ROTATION_FILE, skipping commit"
+          else
+            git commit -m "citrix-image-rotation: decommission ${{ inputs.image_label }}"
+            git pull --rebase
+            git push
+          fi
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Write Terraform vars
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+
+      - name: terraform apply
+        working-directory: ${{ env.TF_WORKDIR }}
+        env:
+          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+        run: |
+          terraform init
+          terraform apply -auto-approve
+
+      # citrix_image_version only wraps a *reference* to the Azure Compute
+      # Gallery image version by pointer (gallery/definition/version) - it
+      # doesn't own that Azure resource's lifecycle, since Packer publishes
+      # gallery image versions directly, outside Terraform. So the apply
+      # above never deletes the underlying gallery image version - it just
+      # accumulates forever unless removed here explicitly.
+      - name: Delete the Azure Compute Gallery image version
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: |
+          IFS='-' read -r ym n <<< "${{ inputs.image_label }}"
+          gallery_version="${ym}.${n}.0"
+          rg=$(python3 -c "import json; print(json.load(open('ci.auto.tfvars.json'))['resource_group_name'])")
+          gallery=$(python3 -c "import json; print(json.load(open('ci.auto.tfvars.json'))['gallery_name'])")
+          definition=$(python3 -c "import json; print(json.load(open('ci.auto.tfvars.json'))['image_definition_name'])")
+          az sig image-version delete \
+            --resource-group "$rg" \
+            --gallery-name "$gallery" \
+            --gallery-image-definition "$definition" \
+            --gallery-image-version "$gallery_version"
+
+  # Split into a plan job and an apply job that applies exactly the saved
+  # plan, both gated behind citrix-cutover-approval - so the reviewer sees
+  # two prompts: approving "plan" is low-stakes (read-only, no mutation)
+  # and unlocks the actual plan output; only then do they approve "apply"
+  # with the real change already visible, instead of approving blind and
+  # finding out what happened after terraform apply -auto-approve already
+  # ran. (ARM_CLIENT_ID/ARM_TENANT_ID/ARM_SUBSCRIPTION_ID/CITRIX_CLIENT_SECRET
+  # are environment-scoped secrets - a job can't read them without
+  # declaring that environment, and declaring it always gates the whole
+  # job, so plan can't be made to run unattended while still using these
+  # credentials.)
+  plan:
+    if: inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    environment: citrix-cutover-approval
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Write Terraform vars
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+
+      - name: terraform plan
+        working-directory: ${{ env.TF_WORKDIR }}
+        env:
+          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+        run: |
+          terraform init
+          terraform plan -out=tfplan
+          terraform show -no-color tfplan
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.TF_WORKDIR }}/tfplan
+          retention-days: 1
+
+  apply:
+    if: inputs.action == 'apply'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: citrix-cutover-approval
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Write Terraform vars
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.TF_WORKDIR }}
+
+      - name: terraform apply (the plan reviewed in the "plan" job above)
+        working-directory: ${{ env.TF_WORKDIR }}
+        env:
+          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+        run: |
+          terraform init
+          terraform apply tfplan

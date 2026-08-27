@@ -1,0 +1,47 @@
+One-time Azure CLI bootstrap for the Terraform remote state backend
+====================================================================
+
+Terraform's azurerm backend (see backend.tf) needs its resource group,
+storage account, and container to already exist before `terraform init`
+will work - it cannot create its own state storage. Run the commands below
+once, manually, before the first `terraform init` in this environment.
+
+Values below match backend.tf exactly. If the storage account name
+"driftwoodtfstate" is already taken (storage account names are globally
+unique across all of Azure), pick a different name and update both this
+file and backend.tf to match.
+
+Prerequisite: `az login` (and `az account set --subscription <id>` if you
+have more than one subscription).
+
+--------------------------------------------------------------------
+1. Create the resource group
+--------------------------------------------------------------------
+az group create --name rg-driftwood-tfstate --location canadacentral
+
+--------------------------------------------------------------------
+2. Create the storage account
+   (TLS 1.2 minimum, public blob access disabled)
+--------------------------------------------------------------------
+az storage account create --name driftwoodtfstate --resource-group rg-driftwood-tfstate --location canadacentral --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 --allow-blob-public-access false
+
+--------------------------------------------------------------------
+3. Enable blob versioning (recommended - protects the state file
+   from accidental overwrite/corruption)
+--------------------------------------------------------------------
+az storage account blob-service-properties update --account-name driftwoodtfstate --enable-versioning true
+
+--------------------------------------------------------------------
+4. Create the "tfstate" container
+   (--auth-mode login uses your own Azure AD identity, no storage key
+   needed - make sure you have the "Storage Blob Data Contributor"
+   role on the storage account, or use --auth-mode key instead)
+--------------------------------------------------------------------
+az storage container create --name tfstate --account-name driftwoodtfstate --auth-mode login
+
+--------------------------------------------------------------------
+5. Verify
+--------------------------------------------------------------------
+az storage container list --account-name driftwoodtfstate --auth-mode login --output table
+
+After this exists, `terraform init` in this directory will succeed.

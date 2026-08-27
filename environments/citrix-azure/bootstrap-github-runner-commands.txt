@@ -1,0 +1,55 @@
+One-time setup for the self-hosted GitHub Actions runner
+=========================================================
+
+modules/github-runner provisions the bare VM (see main.tf's `module
+"github_runner"`), but registering it with GitHub is a manual step -
+runner registration tokens are short-lived (1 hour) and are deliberately
+kept out of Terraform state/tfvars, the same reasoning as
+CITRIX_CLIENT_SECRET in providers.tf. Run the commands below once, manually,
+after `terraform apply` has created the VM.
+
+Prerequisite: a way to reach the runner VM's private IP (see the
+`github_runner_private_ip_address` Terraform output) - e.g. Azure Bastion, a
+VPN into the VNet, or a temporary jump host. This repo doesn't provision any
+of those today; use whatever connectivity techops already has into this
+VNet, or set one up first if none exists.
+
+--------------------------------------------------------------------
+1. Generate a runner registration token (requires repo admin access)
+--------------------------------------------------------------------
+gh api -X POST repos/<org>/driftwood-ale-works-daas/actions/runners/registration-token --jq .token
+
+--------------------------------------------------------------------
+2. SSH into the runner VM and install the runner agent
+--------------------------------------------------------------------
+ssh ghrunner@<github_runner_private_ip_address>
+
+mkdir actions-runner && cd actions-runner
+curl -o actions-runner-linux-x64.tar.gz -L \
+  https://github.com/actions/runner/releases/latest/download/actions-runner-linux-x64.tar.gz
+tar xzf actions-runner-linux-x64.tar.gz
+
+--------------------------------------------------------------------
+3. Register the runner with the label used by
+   .github/workflows/citrix-image-rotation.yml
+--------------------------------------------------------------------
+./config.sh --url https://github.com/<org>/driftwood-ale-works-daas \
+  --token <token from step 1> \
+  --labels driftwood-runner \
+  --unattended
+
+--------------------------------------------------------------------
+4. Install and start it as a service (survives reboots)
+--------------------------------------------------------------------
+sudo ./svc.sh install
+sudo ./svc.sh start
+
+--------------------------------------------------------------------
+5. Verify
+--------------------------------------------------------------------
+Trigger the "citrix-image-rotation" workflow manually from the GitHub
+Actions tab and confirm the job picks up the
+`driftwood-runner` runner.
+
+The registration token from step 1 expires after an hour - if you need to
+re-register later (e.g. a new runner VM), generate a fresh one.

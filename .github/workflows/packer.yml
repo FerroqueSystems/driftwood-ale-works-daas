@@ -1,0 +1,36 @@
+name: packer
+
+on:
+  pull_request:
+    paths:
+      - "packer/**"
+  workflow_dispatch: {}
+
+jobs:
+  fmt-validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packer/images
+    env:
+      # Dummy values so `packer validate` can type-check the template without
+      # real credentials. This job never builds or touches real infra.
+      PKR_VAR_client_secret: "ci-placeholder"
+      PKR_VAR_admin_password: "ci-placeholder-Passw0rd!"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-packer@main
+        with:
+          version: latest
+
+      - name: packer fmt
+        run: packer fmt -check -recursive .
+
+      - name: packer init
+        run: packer init azure-windows-base.pkr.hcl
+
+      - name: packer validate
+        run: |
+          cp win11-azure.pkrvars.hcl.example ci-validate.pkrvars.hcl
+          packer validate -var-file=ci-validate.pkrvars.hcl azure-windows-base.pkr.hcl
