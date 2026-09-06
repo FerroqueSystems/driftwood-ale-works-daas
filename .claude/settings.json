@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(terraform validate *)",
+      "Bash(py --version)"
+    ]
+  }
+}

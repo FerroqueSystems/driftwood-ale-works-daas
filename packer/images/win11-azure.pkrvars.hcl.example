@@ -1,9 +1,16 @@
+# subscription_id/location/build_resource_group_name/gallery_resource_group_name/
+# gallery_name/gallery_image_name below must match this repo's own
+# Terraform-created resources (environments/citrix-azure/terraform.tfvars -
+# azure_subscription_id, location, resource_group_name, gallery_name,
+# image_definition_name) - Packer only publishes a new image *version* into
+# an already-existing gallery/image definition (module.image_gallery), it
+# doesn't create them.
 subscription_id             = "00000000-0000-0000-0000-000000000000"
-location                    = "canadacentral"
-build_resource_group_name   = "rg-clickops-gitops-foundation-demo"
-gallery_resource_group_name = "rg-clickops-gitops-foundation-demo"
-gallery_name                = "cgclickopsdemo"
-gallery_image_name          = "win11-25h2-cvad"
+location                    = "eastus"
+build_resource_group_name   = "rg-driftwood-citrix-daas"
+gallery_resource_group_name = "rg-driftwood-citrix-daas"
+gallery_name                = "driftwoodcitrixgallery"
+gallery_image_name          = "win11-vda"
 gallery_image_version       = "1.0.0"
 
 # Review publisher / offer / sku in Azure before first build.

@@ -93,64 +93,47 @@ variable "citrix_resource_pool_name" {
 
 # --- Golden image versioning / machine catalog rotation ---
 # See ../../modules/citrix/README.md for the monthly "YYMM-N" rotation
-# convention this drives. No hard entry-count limit - see
+# convention this drives. No hard entry-count limit per environment - see
 # scripts/rotate_image_versions.py's --max-entries.
 
-variable "image_versions" {
-  description = "Golden image builds to run as machine catalogs, keyed by the \"YYMM-N\" build label (e.g. \"2607-1\")"
-  type = map(object({
+variable "catalog_rotation" {
+  description = "Per-environment golden image build/catalog rotation state, outer-keyed by environment (\"dev\"/\"test\"/\"prod\"), inner-keyed by the \"YYMM-N\" build label (e.g. \"2607-1\"). CI-managed - sourced from rotation.auto.tfvars.json, not terraform.tfvars."
+  type = map(map(object({
     gallery_image_version = string
     total_machines        = number
     machine_count         = number
     machine_naming_scheme = string
     catalog_name          = string
+  })))
+}
+
+variable "delivery_groups" {
+  description = "Static per-environment delivery group config, keyed by environment (\"dev\"/\"test\"/\"prod\") - name, published desktop, access allow-list, autoscale settings, and the catalog-naming conventions the rotation workflow seeds new builds with."
+  type = map(object({
+    name                                 = string
+    published_desktop_name               = string
+    desktop_restricted_access_allow_list = list(string)
+    autoscale_enabled                    = bool
+    autoscale_timezone                   = string
+    power_time_schemes = list(object({
+      days_of_week          = list(string)
+      display_name          = string
+      peak_time_ranges      = list(string)
+      pool_using_percentage = bool
+      pool_size_schedules = list(object({
+        time_range = string
+        pool_size  = number
+      }))
+    }))
+    catalog_name_prefix   = string
+    machine_naming_scheme = string
   }))
-}
-
-variable "citrix_catalog_name_prefix" {
-  description = "Prefix for newly-staged machine catalog names (each is named \"<prefix>-<build label>\") - NOT passed into module.citrix (catalog_name is per-build, recorded in image_versions/rotation.auto.tfvars.json, so changing this doesn't rename already-built catalogs). Read from ci.auto.tfvars.json by citrix-image-rotation.yml's build job to seed new labels."
-  type        = string
-  default     = "driftwood-win11-vda"
-}
-
-variable "citrix_delivery_group_name" {
-  description = "Name of the Citrix delivery group that desktops are published through"
-  type        = string
-  default     = "driftwood-win11-desktops"
-}
-
-variable "citrix_published_desktop_name" {
-  description = "Display name of the published desktop shown to end users in Citrix Workspace"
-  type        = string
-  default     = "Windows 11 Entra Desktop"
-}
-
-variable "citrix_desktop_restricted_access_allow_list" {
-  description = "Users/groups allowed to see the published desktop, in Citrix's format (e.g. \"OID:/azuread/<object_id>\" for an Entra ID group)"
-  type        = list(string)
-}
-
-variable "citrix_autoscale_enabled" {
-  description = "Whether autoscale is enabled for the delivery group"
-  type        = bool
-  default     = true
-}
-
-variable "citrix_autoscale_timezone" {
-  description = "Windows time zone ID (e.g. \"Eastern Standard Time\") the delivery group's autoscale power time schemes run in"
-  type        = string
 }
 
 variable "citrix_allocation_type" {
   description = "MCS allocation type for the machine catalogs"
   type        = string
   default     = "Random"
-}
-
-variable "citrix_machine_naming_scheme" {
-  description = "MCS machine account naming scheme template (numeric suffix denoted by ##) for newly-staged builds - NOT passed into module.citrix (naming_scheme is per-build, recorded in image_versions/rotation.auto.tfvars.json, so changing this doesn't affect already-built catalogs). Read from ci.auto.tfvars.json by citrix-image-rotation.yml's build job to seed new labels."
-  type        = string
-  default     = "driftwood-vda-##"
 }
 
 variable "citrix_vda_service_offering" {
@@ -199,6 +182,25 @@ variable "github_runner_admin_username" {
 variable "github_runner_admin_ssh_public_key" {
   description = "SSH public key for the self-hosted runner VM's admin user (key-based auth only, no password)"
   type        = string
+}
+
+# Fresh subscriptions have no existing Bastion/VPN/jump host to reach the
+# private runner VM - this pair of variables opens a temporary, source-IP-
+# scoped path in instead (a public IP on the runner NIC + a matching inbound
+# NSG rule), for the one-time SSH registration step in
+# bootstrap-github-runner-commands.txt. Leave enable_runner_temporary_ssh_access
+# false otherwise; set it true + your current IP, apply, register the
+# runner, then set it back to false and re-apply to close the access again.
+variable "enable_runner_temporary_ssh_access" {
+  description = "Whether to open a temporary public IP + source-IP-scoped NSG rule to SSH into the self-hosted runner VM for one-time registration"
+  type        = bool
+  default     = false
+}
+
+variable "admin_source_ip_cidr" {
+  description = "CIDR (e.g. \"203.0.113.5/32\") allowed to SSH into the runner VM while enable_runner_temporary_ssh_access is true - home/mobile IPs are dynamic, re-supply this if it changes"
+  type        = string
+  default     = null
 }
 
 # --- Golden image pipeline (Packer publishes into this gallery, see ../../packer) ---

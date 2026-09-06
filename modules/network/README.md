@@ -16,29 +16,18 @@ extensions (e.g. `ConfigureRemotingForAnsible` in
 Citrix Cloud connectivity. See
 [Default outbound access in Azure](https://learn.microsoft.com/azure/virtual-network/ip-services/default-outbound-access).
 
-## Route table caveat (Cato SD-WAN)
+## Temporary SSH access (`admin_ssh_source_cidr`)
 
-In this environment the subnet also has a route table applied outside this
-repo's Terraform - a corporate Cato SD-WAN UDR that force-tunnels the
-subnet's internet-bound traffic through Cato instead of straight out to the
-internet. That silently defeats the NAT Gateway above for anything routed by
-the UDR's default (`0.0.0.0/0`) route, even though the NAT Gateway is
-correctly attached - VM extension *control-plane* traffic (e.g.
-`AADLoginForWindows`) still works because it goes over Azure's
-`168.63.129.16` wireserver path, which bypasses subnet UDRs by design, but a
-real in-guest HTTPS call (e.g. `CustomScriptExtension` downloading a blob)
-does not.
-
-The subnet enables the `Microsoft.Storage` service endpoint to work around
-this for Azure Storage traffic specifically: it adds a more specific system
-route for Storage's prefixes (next hop `VirtualNetwork`) that wins over the
-UDR's `0.0.0.0/0`, keeping that traffic on the Microsoft backbone regardless
-of Cato. This is what lets the `ConfigureRemotingForAnsible` extension in
-[modules/cloud-connectors](../cloud-connectors/README.md) reach the
-artifact-storage blob. It does **not** fix connectivity for anything else the
-Cato UDR still force-tunnels (Windows Update, Citrix Cloud control-plane
-calls, etc.) - those need an explicit allow rule from whoever manages the
-Cato policy, which this repo has no visibility into or control over.
+This subscription has no pre-existing Bastion/VPN/jump host, so there's
+normally no way to reach anything in the VDA subnet from outside the VNet -
+by design, the NSG above has no inbound rules. When
+`var.admin_ssh_source_cidr` is set (non-null), this module adds a single
+inbound-allow rule for TCP/22 scoped to that CIDR, for the one-time
+[self-hosted GitHub runner](../github-runner/README.md) registration step -
+see [`bootstrap-github-runner-commands.txt`](../../environments/citrix-azure/bootstrap-github-runner-commands.txt).
+Leave it unset otherwise. Note that Azure evaluates subnet-level and
+NIC-level NSGs independently, so a NIC-level rule alone (without this one)
+would still be blocked by this subnet's default deny.
 
 See `variables.tf` / `outputs.tf` for inputs and outputs, and
 [environments/citrix-azure](../../environments/citrix-azure/README.md) for how

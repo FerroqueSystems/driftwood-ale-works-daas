@@ -1,29 +1,42 @@
 name: citrix-image-rotation
 
-# Monthly Patch-Tuesday golden image / machine catalog rotation. Manually
-# triggered after Patch Tuesday's updates are ready - not scheduled. "build"
-# refuses to stage a brand new label once
-# environments/citrix-azure/rotation.auto.tfvars.json already has
-# --max-entries entries (default 5, a soft guardrail against unbounded
-# catalog sprawl - tune it as the team's build cadence changes) - see
-# scripts/rotate_image_versions.py and modules/citrix/README.md. cutover and
-# decommission aren't limited by this and can target any staged label.
+# Monthly Patch-Tuesday golden image / machine catalog rotation, run
+# independently per environment (dev/test/prod - the "environment" input).
+# Manually triggered after Patch Tuesday's updates are ready - not scheduled.
+# One shared Packer build feeds all three environments; each is cut over to
+# it on its own schedule (dev first, then test, then prod), which is why
+# every job below takes an "environment" input. "build" refuses to stage a
+# brand new label in an environment once that environment's entry in
+# environments/citrix-azure/rotation.auto.tfvars.json's catalog_rotation
+# already has --max-entries entries (default 5, a soft guardrail against
+# unbounded catalog sprawl, scoped per environment - tune it as each team's
+# build cadence changes) - see scripts/rotate_image_versions.py and
+# modules/citrix/README.md. cutover and decommission aren't limited by this
+# and can target any label already staged in that environment.
 #
-# - build: unattended. Publishes a new Packer image version and stages a new
-#   machine catalog (machine_count 0 - provisioned but not serving sessions).
-# - cutover: gated behind the "citrix-cutover-approval" environment (add a
-#   required reviewer to it in repo Settings > Environments). Reassigns
-#   desktops from the outgoing catalog to the new one.
-# - decommission: gated behind "citrix-decommission-approval". Deletes the
-#   fully-drained outgoing catalog/image version, both the Citrix-side
-#   machine catalog/image version and the underlying Azure Compute Gallery
-#   image version Packer published (citrix_image_version only references
-#   that by pointer - terraform apply alone never deletes it).
-# - apply: gated behind "citrix-cutover-approval". Plain `terraform apply`
-#   with no rotation.auto.tfvars.json change - for delivery-group config
-#   (published desktop name, restricted access, autoscale schedule) that
-#   isn't part of the monthly rotation state machine and has no other
-#   in-CI path to get applied.
+# - build: unattended. Publishes a new Packer image version (skipped if
+#   another environment already published this exact version) and stages a
+#   new machine catalog in the chosen environment (machine_count 0 -
+#   provisioned but not serving sessions).
+# - cutover: gated behind the "citrix-cutover-approval-<environment>"
+#   environment (add a required reviewer to each in repo Settings >
+#   Environments - dev/test can be lighter-gated or ungated, prod should
+#   require a named reviewer). Reassigns desktops from the outgoing catalog
+#   to the new one within that environment's delivery group.
+# - decommission: gated behind "citrix-decommission-approval-<environment>".
+#   Deletes the fully-drained outgoing catalog/image version from that
+#   environment, and - only if no other environment still references the
+#   same build label - the underlying Azure Compute Gallery image version
+#   Packer published too (citrix_image_version only references that by
+#   pointer - terraform apply alone never deletes it, and it's deduped
+#   across environments, see modules/citrix/main.tf).
+# - apply: gated behind "citrix-cutover-approval-prod" (the strictest tier,
+#   since an untargeted apply can touch any environment's delivery-group
+#   config in one pass). Plain `terraform apply` with no
+#   rotation.auto.tfvars.json change - for delivery-group config (published
+#   desktop name, restricted access, autoscale schedule) that isn't part of
+#   the monthly rotation state machine and has no other in-CI path to get
+#   applied. Ignores the "environment" input.
 #
 # This workflow needs the full non-secret environment config (everything in
 # terraform.tfvars.example) and the Packer build vars (everything in
@@ -42,11 +55,16 @@ on:
         required: true
         type: choice
         options: [build, cutover, decommission, apply]
+      environment:
+        description: 'Environment to build/cut over/decommission - mirrors the paved-road promotion order (dev first, then test, then prod). Ignored by "apply" (applies pending delivery-group config drift across all environments in one pass).'
+        required: true
+        type: choice
+        options: [dev, test, prod]
       image_label:
         description: 'Build label in "YYMM-N" form, e.g. "2607-1" (the label being built, cut over to, or decommissioned). Ignored by "apply" - put anything, e.g. the current live label.'
         required: true
       old_image_label:
-        description: "cutover only: the outgoing build label to phase out (leave blank if this is the first-ever catalog)"
+        description: "cutover only: the outgoing build label to phase out (leave blank if this is the first-ever catalog in this environment)"
         required: false
       total_machines:
         description: "build only: number of machines to provision in the new catalog"
@@ -96,10 +114,11 @@ jobs:
       # never creates them. Apply first so those exist before the build, which
       # matters on a first-ever build where nothing has been applied yet.
       # Scoped to just module.image_gallery (not a full apply) because
-      # var.image_versions may already have this build's label staged from
-      # rotation.auto.tfvars.json (committed by a previous run of this same
-      # workflow) - an untargeted apply here would try to create
-      # citrix_image_version for a gallery image Packer hasn't published yet.
+      # var.catalog_rotation may already have this build's label staged (in
+      # this or another environment) from rotation.auto.tfvars.json
+      # (committed by a previous run of this same workflow) - an untargeted
+      # apply here would try to create citrix_image_version for a gallery
+      # image Packer hasn't published yet.
       - name: terraform apply (ensure prerequisites exist before the image build)
         working-directory: ${{ env.TF_WORKDIR }}
         env:
@@ -154,9 +173,18 @@ jobs:
 
       - name: Stage the new machine catalog (machine_count 0)
         run: |
-          naming_scheme=$(python3 -c "import json; print(json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))['citrix_machine_naming_scheme'])")
-          catalog_name_prefix=$(python3 -c "import json; print(json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))['citrix_catalog_name_prefix'])")
+          naming_scheme=$(python3 -c "
+          import json
+          cfg = json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))
+          print(cfg['delivery_groups']['${{ inputs.environment }}']['machine_naming_scheme'])
+          ")
+          catalog_name_prefix=$(python3 -c "
+          import json
+          cfg = json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))
+          print(cfg['delivery_groups']['${{ inputs.environment }}']['catalog_name_prefix'])
+          ")
           python3 scripts/rotate_image_versions.py "$ROTATION_FILE" build \
+            --env "${{ inputs.environment }}" \
             --label "${{ inputs.image_label }}" \
             --gallery-version "${{ steps.version.outputs.gallery_version }}" \
             --total-machines "${{ inputs.total_machines }}" \
@@ -183,6 +211,10 @@ jobs:
       # associated catalog cannot be less than 1") since it's a brand new
       # association, not a drain of an existing one. The delivery group only
       # picks up the new catalog at cutover, once machine_count is >= 1.
+      # image_version is keyed by label only (deduped across environments,
+      # see modules/citrix/main.tf) - this is a no-op for it if another
+      # environment already staged this same label. machine_catalog is keyed
+      # by "<environment>-<label>".
       - name: terraform apply (create the machine catalog for the new image version)
         working-directory: ${{ env.TF_WORKDIR }}
         env:
@@ -190,18 +222,19 @@ jobs:
         run: |
           terraform apply -auto-approve \
             -target="module.citrix.citrix_image_version.vda[\"${{ inputs.image_label }}\"]" \
-            -target="module.citrix.citrix_machine_catalog.vda[\"${{ inputs.image_label }}\"]"
+            -target="module.citrix.citrix_machine_catalog.vda[\"${{ inputs.environment }}-${{ inputs.image_label }}\"]"
 
   cutover:
     if: inputs.action == 'cutover'
     runs-on: ubuntu-latest
-    environment: citrix-cutover-approval
+    environment: citrix-cutover-approval-${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Cut the delivery group over to the new catalog
         run: |
           python3 scripts/rotate_image_versions.py "$ROTATION_FILE" cutover \
+            --env "${{ inputs.environment }}" \
             --new-label "${{ inputs.image_label }}" \
             --machine-count "${{ inputs.machine_count }}" \
             ${{ inputs.old_image_label != '' && format('--old-label {0}', inputs.old_image_label) || '' }}
@@ -244,14 +277,28 @@ jobs:
   decommission:
     if: inputs.action == 'decommission'
     runs-on: ubuntu-latest
-    environment: citrix-decommission-approval
+    environment: citrix-decommission-approval-${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Remove the drained catalog/image version from the rotation state
+      - name: Remove the drained catalog/image version from this environment's rotation state
+        id: decommission
         run: |
           python3 scripts/rotate_image_versions.py "$ROTATION_FILE" decommission \
+            --env "${{ inputs.environment }}" \
             --label "${{ inputs.image_label }}"
+          # citrix_image_version is deduped across environments (see
+          # modules/citrix/main.tf) - only delete the underlying Azure
+          # Compute Gallery image version below once NO environment still
+          # references this label, otherwise this would rip the shared
+          # image out from under an environment still live on it.
+          still_referenced=$(python3 -c "
+          import json
+          data = json.load(open('$ROTATION_FILE'))
+          label = '${{ inputs.image_label }}'
+          print('true' if any(label in envmap for envmap in data['catalog_rotation'].values()) else 'false')
+          ")
+          echo "still_referenced=$still_referenced" >> "$GITHUB_OUTPUT"
 
       - name: Commit the rotation state
         run: |
@@ -295,6 +342,7 @@ jobs:
       # above never deletes the underlying gallery image version - it just
       # accumulates forever unless removed here explicitly.
       - name: Delete the Azure Compute Gallery image version
+        if: steps.decommission.outputs.still_referenced != 'true'
         working-directory: ${{ env.TF_WORKDIR }}
         run: |
           IFS='-' read -r ym n <<< "${{ inputs.image_label }}"
@@ -309,12 +357,15 @@ jobs:
             --gallery-image-version "$gallery_version"
 
   # Split into a plan job and an apply job that applies exactly the saved
-  # plan, both gated behind citrix-cutover-approval - so the reviewer sees
-  # two prompts: approving "plan" is low-stakes (read-only, no mutation)
-  # and unlocks the actual plan output; only then do they approve "apply"
-  # with the real change already visible, instead of approving blind and
-  # finding out what happened after terraform apply -auto-approve already
-  # ran. (ARM_CLIENT_ID/ARM_TENANT_ID/ARM_SUBSCRIPTION_ID/CITRIX_CLIENT_SECRET
+  # plan, both gated behind citrix-cutover-approval-prod (the strictest
+  # tier - an untargeted apply here can touch any environment's
+  # delivery-group config in one pass, not just the "environment" input,
+  # which this action ignores) - so the reviewer sees two prompts: approving
+  # "plan" is low-stakes (read-only, no mutation) and unlocks the actual
+  # plan output; only then do they approve "apply" with the real change
+  # already visible, instead of approving blind and finding out what
+  # happened after terraform apply -auto-approve already ran.
+  # (ARM_CLIENT_ID/ARM_TENANT_ID/ARM_SUBSCRIPTION_ID/CITRIX_CLIENT_SECRET
   # are environment-scoped secrets - a job can't read them without
   # declaring that environment, and declaring it always gates the whole
   # job, so plan can't be made to run unattended while still using these
@@ -322,7 +373,7 @@ jobs:
   plan:
     if: inputs.action == 'apply'
     runs-on: ubuntu-latest
-    environment: citrix-cutover-approval
+    environment: citrix-cutover-approval-prod
     steps:
       - uses: actions/checkout@v4
 
@@ -359,7 +410,7 @@ jobs:
     if: inputs.action == 'apply'
     needs: plan
     runs-on: ubuntu-latest
-    environment: citrix-cutover-approval
+    environment: citrix-cutover-approval-prod
     steps:
       - uses: actions/checkout@v4
 

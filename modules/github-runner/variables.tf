@@ -47,3 +47,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "enable_temporary_public_access" {
+  description = "Whether to attach a temporary public IP to the runner VM's NIC, for one-time SSH registration in a subscription with no other connectivity path (Bastion/VPN/jump host) - see bootstrap-github-runner-commands.txt. Requires a matching NSG allow rule (modules/network's admin_ssh_source_cidr)."
+  type        = bool
+  default     = false
+}

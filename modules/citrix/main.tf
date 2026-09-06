@@ -29,11 +29,60 @@ resource "citrix_azure_hypervisor_resource_pool" "this" {
   subnets                        = var.subnets
 }
 
-# --- Golden image versioning, machine catalogs, delivery group ---
+# --- Golden image versioning, machine catalogs, delivery groups ---
 # One long-lived image definition wraps the Azure Compute Gallery image
 # definition Packer publishes into (see ../../modules/image-gallery and
-# ../../packer). Each monthly build gets its own citrix_image_version +
-# citrix_machine_catalog, keyed by the "YYMM-N" label in var.image_versions.
+# ../../packer) - shared by every environment, since there's one golden-image
+# lineage feeding dev/test/prod alike. Each monthly build gets its own
+# citrix_image_version (deduped across environments, see
+# local.unique_image_versions) and one citrix_machine_catalog per environment
+# that has staged it (see local.flattened_catalogs), keyed by the "YYMM-N"
+# label in var.catalog_rotation.
+
+locals {
+  # Flatten var.catalog_rotation (env -> label -> catalog) down to a single
+  # map keyed "<env>-<label>" (e.g. "dev-2601-1") for citrix_machine_catalog's
+  # for_each - each environment's catalogs are wholly independent Citrix
+  # objects even when two environments happen to be staged on the same build
+  # label.
+  flattened_catalogs = merge([
+    for env, labels in var.catalog_rotation : {
+      for label, v in labels : "${env}-${label}" => merge(v, {
+        env   = env
+        label = label
+      })
+    }
+  ]...)
+
+  # Dedupe across environments down to unique build labels for
+  # citrix_image_version's for_each, keyed by label only - the image version
+  # itself is environment-agnostic (one shared Packer build feeds
+  # dev/test/prod alike), so the same label staged in all three must not try
+  # to create three citrix_image_version resources for the same underlying
+  # Azure Compute Gallery image version. Relies on every environment agreeing
+  # on gallery_image_version for a given label, enforced by var.catalog_rotation's
+  # validation block.
+  unique_image_versions = merge([
+    for env, labels in var.catalog_rotation : {
+      for label, v in labels : label => v.gallery_image_version
+    }
+  ]...)
+}
+
+# One resource group per machine catalog build (keyed the same way as
+# citrix_machine_catalog below, "<env>-<label>") so MCS-provisioned VDA
+# VMs/NICs/disks from different environments/rotation generations never land
+# in the same resource group - keeps cutover/decommission cycles from
+# crossing over each other. Keyed off each.key (the for_each identity itself,
+# structurally unique) rather than catalog_name (only conventionally unique,
+# enforced by Citrix's API, not Terraform).
+resource "azurerm_resource_group" "vda" {
+  for_each = local.flattened_catalogs
+
+  name     = "rg-vda-${each.key}"
+  location = var.location
+  tags     = var.tags
+}
 
 resource "citrix_image_definition" "vda" {
   name                     = var.image_definition_name
@@ -50,7 +99,7 @@ resource "citrix_image_definition" "vda" {
 }
 
 resource "citrix_image_version" "vda" {
-  for_each = var.image_versions
+  for_each = local.unique_image_versions
 
   image_definition         = citrix_image_definition.vda.id
   hypervisor               = citrix_azure_hypervisor.this.id
@@ -65,16 +114,16 @@ resource "citrix_image_version" "vda" {
     gallery_image = {
       gallery    = var.image_gallery_name
       definition = var.image_definition_name
-      version    = each.value.gallery_image_version
+      version    = each.value
     }
   }
 }
 
 resource "citrix_machine_catalog" "vda" {
-  for_each = var.image_versions
+  for_each = local.flattened_catalogs
 
   name              = each.value.catalog_name
-  description       = "Golden image build ${each.key}"
+  description       = "Golden image build ${each.value.label} (${each.value.env})"
   zone              = citrix_zone.this.id
   allocation_type   = var.allocation_type
   session_support   = var.session_support
@@ -107,7 +156,10 @@ resource "citrix_machine_catalog" "vda" {
       # Without this, MCS auto-creates its own resource group per
       # hypervisor connection ("citrix-xd-<connection-guid>-<random>") to
       # hold provisioned VMs/NICs/disks instead of using an existing one.
-      vda_resource_group = var.vda_resource_group_name
+      # Dedicated per catalog build (azurerm_resource_group.vda above, keyed
+      # the same way) rather than one shared resource group, so different
+      # environments/rotation generations' VDA resources never cross over.
+      vda_resource_group = azurerm_resource_group.vda[each.key].name
 
       # Required when identity_type = "AzureAD" - a Template Spec Citrix uses
       # to derive machine defaults (size, boot diagnostics, OS disk caching,
@@ -143,23 +195,27 @@ resource "citrix_machine_catalog" "vda" {
 }
 
 resource "citrix_delivery_group" "vda" {
-  name = var.delivery_group_name
+  for_each = var.delivery_groups
+
+  name = each.value.name
 
   # Citrix rejects machine_count = 0 on *any* entry in
   # associated_machine_catalogs, not just a newly-added one - a catalog being
   # drained for decommission (machine_count dropped to 0 at cutover) has to
-  # be removed from this list entirely, not kept in it at zero.
+  # be removed from this list entirely, not kept in it at zero. Scoped to
+  # only this environment's slice of local.flattened_catalogs - dev/test/prod
+  # each own a disjoint set of machine catalogs.
   associated_machine_catalogs = [
-    for label, v in var.image_versions : {
-      machine_catalog = citrix_machine_catalog.vda[label].id
+    for key, v in local.flattened_catalogs : {
+      machine_catalog = citrix_machine_catalog.vda[key].id
       machine_count   = v.machine_count
     }
-    if v.machine_count > 0
+    if v.env == each.key && v.machine_count > 0
   ]
 
   desktops = [
     {
-      published_name = var.published_desktop_name
+      published_name = each.value.published_desktop_name
       enabled        = true
       # Required by Citrix whenever the associated machine catalog uses
       # Random allocation type (var.allocation_type here) - lets a user
@@ -168,33 +224,21 @@ resource "citrix_delivery_group" "vda" {
       # machine.
       enable_session_roaming = true
       restricted_access_users = {
-        allow_list = var.desktop_restricted_access_allow_list
+        allow_list = each.value.desktop_restricted_access_allow_list
       }
     }
   ]
 
   autoscale_settings = {
-    autoscale_enabled = var.autoscale_enabled
-    timezone          = var.autoscale_timezone
+    autoscale_enabled = each.value.autoscale_enabled
+    timezone          = each.value.autoscale_timezone
 
-    # Weekday ramp: 20% powered on 08:00-10:00, 10% 10:00-17:00, nothing
-    # powered on outside that window (including weekends, which aren't
-    # covered by any power_time_scheme). Citrix rejects an explicit
-    # pool_size = 0 entry ("value must be at least 1") - same "no zero"
-    # rule as associated_machine_catalogs' machine_count, just surfacing in
-    # a different field. So "nothing powered on" is expressed by omitting
-    # the time range entirely rather than listing it at 0.
-    power_time_schemes = [
-      {
-        days_of_week          = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-        display_name          = "Weekday business hours"
-        peak_time_ranges      = ["08:00-17:00"]
-        pool_using_percentage = true
-        pool_size_schedules = [
-          { time_range = "08:00-10:00", pool_size = 20 },
-          { time_range = "10:00-17:00", pool_size = 10 },
-        ]
-      }
-    ]
+    # Per-environment power time schemes (see var.delivery_groups) - Citrix
+    # rejects an explicit pool_size = 0 entry ("value must be at least 1"),
+    # same "no zero" rule as associated_machine_catalogs' machine_count just
+    # surfacing in a different field, so "nothing powered on" outside a
+    # scheme's time ranges is expressed by omitting that time range entirely
+    # rather than listing it at 0.
+    power_time_schemes = each.value.power_time_schemes
   }
 }

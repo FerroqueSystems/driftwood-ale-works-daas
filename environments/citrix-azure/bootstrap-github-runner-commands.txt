@@ -8,11 +8,24 @@ kept out of Terraform state/tfvars, the same reasoning as
 CITRIX_CLIENT_SECRET in providers.tf. Run the commands below once, manually,
 after `terraform apply` has created the VM.
 
-Prerequisite: a way to reach the runner VM's private IP (see the
-`github_runner_private_ip_address` Terraform output) - e.g. Azure Bastion, a
-VPN into the VNet, or a temporary jump host. This repo doesn't provision any
-of those today; use whatever connectivity techops already has into this
-VNet, or set one up first if none exists.
+Prerequisite: a way to reach the runner VM. This is a fresh subscription with
+no pre-existing Bastion/VPN/jump host, so step 0 below opens a temporary,
+source-IP-scoped path in just for this one-time registration - close it
+again in step 6 once the runner is registered.
+
+--------------------------------------------------------------------
+0. Open temporary SSH access from your current IP
+--------------------------------------------------------------------
+In terraform.tfvars, set:
+  enable_runner_temporary_ssh_access = true
+  admin_source_ip_cidr                = "<your current public IP>/32"
+
+terraform apply
+
+This attaches a temporary public IP to the runner VM's NIC and opens a
+matching NSG rule scoped to just that CIDR. Note the
+`github_runner_temporary_public_ip_address` output - that's what you'll SSH
+to in step 2 (not the private IP).
 
 --------------------------------------------------------------------
 1. Generate a runner registration token (requires repo admin access)
@@ -22,7 +35,7 @@ gh api -X POST repos/<org>/driftwood-ale-works-daas/actions/runners/registration
 --------------------------------------------------------------------
 2. SSH into the runner VM and install the runner agent
 --------------------------------------------------------------------
-ssh ghrunner@<github_runner_private_ip_address>
+ssh ghrunner@<github_runner_temporary_public_ip_address>
 
 mkdir actions-runner && cd actions-runner
 curl -o actions-runner-linux-x64.tar.gz -L \
@@ -51,5 +64,14 @@ Trigger the "citrix-image-rotation" workflow manually from the GitHub
 Actions tab and confirm the job picks up the
 `driftwood-runner` runner.
 
+--------------------------------------------------------------------
+6. Close temporary SSH access again
+--------------------------------------------------------------------
+In terraform.tfvars, set enable_runner_temporary_ssh_access back to false
+and terraform apply - this removes the public IP and the NSG rule. The
+runner keeps running and stays registered; it just goes back to being
+reachable only from inside the VNet.
+
 The registration token from step 1 expires after an hour - if you need to
-re-register later (e.g. a new runner VM), generate a fresh one.
+re-register later (e.g. a new runner VM), generate a fresh one. If your IP
+has changed since step 0, repeat it with the new CIDR.

@@ -3,5 +3,8 @@ terraform {
     citrix = {
       source = "citrix/citrix"
     }
+    azurerm = {
+      source = "hashicorp/azurerm"
+    }
   }
 }

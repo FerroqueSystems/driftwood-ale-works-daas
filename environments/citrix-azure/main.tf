@@ -38,6 +38,12 @@ module "network" {
   vnet_address_space          = var.vnet_address_space
   vda_subnet_address_prefixes = var.vda_subnet_address_prefixes
   tags                        = var.tags
+
+  # Temporary, source-IP-scoped inbound SSH allow rule for one-time GitHub
+  # runner registration (see module.github_runner below and
+  # bootstrap-github-runner-commands.txt) - null (no rule) unless explicitly
+  # enabled.
+  admin_ssh_source_cidr = var.enable_runner_temporary_ssh_access ? var.admin_source_ip_cidr : null
 }
 
 module "identity" {
@@ -80,6 +86,8 @@ module "citrix" {
   application_secret       = module.identity.client_secret
   resource_pool_name       = var.citrix_resource_pool_name
   region                   = local.citrix_region
+  location                 = var.location
+  tags                     = var.tags
   vnet_name                = module.network.vnet_name
   vnet_resource_group_name = azurerm_resource_group.this.name
   subnets                  = [module.network.vda_subnet_name]
@@ -87,17 +95,12 @@ module "citrix" {
   image_gallery_name                = module.image_gallery.gallery_name
   image_gallery_resource_group_name = azurerm_resource_group.this.name
   image_definition_name             = var.image_definition_name
-  image_versions                    = var.image_versions
-  vda_resource_group_name           = azurerm_resource_group.this.name
+  catalog_rotation                  = var.catalog_rotation
 
-  delivery_group_name                  = var.citrix_delivery_group_name
-  allocation_type                      = var.citrix_allocation_type
-  service_offering                     = var.citrix_vda_service_offering
-  storage_type                         = var.citrix_vda_storage_type
-  published_desktop_name               = var.citrix_published_desktop_name
-  desktop_restricted_access_allow_list = var.citrix_desktop_restricted_access_allow_list
-  autoscale_enabled                    = var.citrix_autoscale_enabled
-  autoscale_timezone                   = var.citrix_autoscale_timezone
+  delivery_groups  = var.delivery_groups
+  allocation_type  = var.citrix_allocation_type
+  service_offering = var.citrix_vda_service_offering
+  storage_type     = var.citrix_vda_storage_type
 
   # Template Spec is created out-of-band (az CLI, not Terraform-managed) -
   # see modules/citrix/README.md. No Cloud Connector VMs in this environment
@@ -120,4 +123,8 @@ module "github_runner" {
   admin_username       = var.github_runner_admin_username
   admin_ssh_public_key = var.github_runner_admin_ssh_public_key
   tags                 = var.tags
+
+  # See module.network's admin_ssh_source_cidr above - both are driven off
+  # the same enable_runner_temporary_ssh_access flag.
+  enable_temporary_public_access = var.enable_runner_temporary_ssh_access
 }

@@ -15,57 +15,102 @@ Terraform provider:
   Packer publishes into (see [modules/image-gallery](../image-gallery/README.md)
   and [../../packer](../../packer/README.md)) - created for Citrix Cloud's
   Image Management visibility, but **not** what the machine catalog actually
-  provisions from (see below)
-- `citrix_machine_catalog` / `citrix_delivery_group` - one machine catalog per
-  entry in `var.image_versions`, all assigned to a single delivery group
+  provisions from (see below). Shared across every environment - one golden
+  image lineage feeds dev/test/prod alike, so `citrix_image_version` is
+  deduped down to one resource per unique build label even when multiple
+  environments have staged it (see `local.unique_image_versions` in `main.tf`)
+- `citrix_machine_catalog` / `citrix_delivery_group` - **three** delivery
+  groups (dev/test/prod, `for_each = var.delivery_groups`), each with its own
+  independent set of machine catalogs (`for_each`-flattened from
+  `var.catalog_rotation`, keyed `"<environment>-<label>"`)
+- `azurerm_resource_group.vda` - one dedicated resource group per machine
+  catalog build (same `"<environment>-<label>"` keying, named
+  `"rg-vda-<environment>-<label>"`), holding that build's MCS-provisioned
+  VDA VMs/NICs/disks (`azure_machine_config.vda_resource_group`). This is
+  the only `azurerm` resource this module creates - deliberately per-build
+  rather than one resource group shared by every catalog/environment, so
+  different rotation generations (or different environments) never share
+  VMs/NICs/disks and can't collide or bleed into each other during
+  cutover/decommission. The Template Spec machine profile
+  (`var.machine_profile_resource_group_name`) is a separate, manually-created
+  shared asset and intentionally stays in one resource group across every
+  build - see "Machine identity and machine profile" below.
 
-## Monthly image/catalog rotation
+## Monthly image/catalog rotation, per environment
 
-`var.image_versions` is a map keyed by a `"YYMM-N"` build label (e.g.
-`"2607-1"` for the first 2026-07 build) - each entry gets its own
-`citrix_image_version` + `citrix_machine_catalog`, and is assigned to the
-delivery group with its own `machine_count`. There's no technical limit on
-how many entries can coexist - `citrix_machine_catalog`/`citrix_image_version`
-are `for_each`-driven, and `associated_machine_catalogs` already filters to
-`machine_count > 0` regardless of total count. `scripts/rotate_image_versions.py`'s
-`build` command applies a soft cap (`--max-entries`, default 5) against
-unbounded catalog sprawl when staging a *brand new* label - `cutover` and
-`decommission` aren't limited by it and can target any already-staged label
-at any time, which matters when multiple people are staging builds in
-parallel.
+`var.catalog_rotation` is a map keyed by environment (`"dev"`/`"test"`/`"prod"`),
+each holding a map keyed by `"YYMM-N"` build label (e.g. `"2607-1"` for the
+first 2026-07 build) - each `(environment, label)` pair gets its own
+`citrix_machine_catalog`, assigned to that environment's delivery group with
+its own `machine_count`. Every environment's rotation state is fully
+independent - dev can be on a different label than prod, cut over on its own
+schedule - even though the same label always means the same underlying
+`gallery_image_version` everywhere it's staged (enforced by a `validation`
+block on `var.catalog_rotation`), since one shared Packer build feeds all
+three. There's no technical limit on how many entries can coexist per
+environment - `citrix_machine_catalog` is `for_each`-driven off the flattened
+map, and each delivery group's `associated_machine_catalogs` already filters
+to `machine_count > 0` regardless of total count.
+`scripts/rotate_image_versions.py`'s `build` command applies a soft cap
+(`--max-entries`, default 5, scoped per environment) against unbounded
+catalog sprawl when staging a *brand new* label in one environment -
+`cutover` and `decommission` aren't limited by it and can target any
+already-staged label in any environment at any time, which matters when
+multiple people are staging builds in parallel.
 
 This is driven end-to-end by
 [.github/workflows/citrix-image-rotation.yml](../../.github/workflows/citrix-image-rotation.yml)
-and [scripts/rotate_image_versions.py](../../scripts/rotate_image_versions.py),
-which edit [environments/citrix-azure/rotation.auto.tfvars.json](../../environments/citrix-azure/rotation.auto.tfvars.json)
-(the git-tracked source of `var.image_versions`):
+(which takes an `environment` input alongside `action`) and
+[scripts/rotate_image_versions.py](../../scripts/rotate_image_versions.py)
+(which takes a matching `--env`), both editing
+[environments/citrix-azure/rotation.auto.tfvars.json](../../environments/citrix-azure/rotation.auto.tfvars.json)
+(the git-tracked source of `var.catalog_rotation`):
 
-1. **build** (unattended) - Packer publishes a new golden image version,
-   then a new machine catalog is staged with `machine_count = 0` (provisioned,
-   not yet serving sessions). Citrix rejects **any** entry in a delivery
-   group's `associated_machine_catalogs` with `machine_count = 0` ("machine_count
-   of the associated catalog cannot be less than 1") - not just a newly-added
+1. **build** (unattended) - Packer publishes a new golden image version (or
+   this step is skipped if another environment already published this exact
+   version - it's shared), then a new machine catalog is staged in the
+   chosen environment with `machine_count = 0` (provisioned, not yet serving
+   sessions). Citrix rejects **any** entry in a delivery group's
+   `associated_machine_catalogs` with `machine_count = 0` ("machine_count of
+   the associated catalog cannot be less than 1") - not just a newly-added
    catalog, but an existing one whose count has been drained to 0 too. So
-   `modules/citrix/main.tf` filters `associated_machine_catalogs` down to
-   only catalogs with `machine_count > 0`; a label at 0 (freshly staged, or
-   drained ahead of decommission) simply isn't in the list. On top of that,
-   the build step's `terraform apply` is scoped with `-target` to just that
-   label's `citrix_image_version`/`citrix_machine_catalog`, so it doesn't
-   even attempt a delivery-group update while staging. **Exception: the very
-   first catalog ever** - there's no existing delivery group to attach a
-   catalog to and no outgoing catalog to cut over from, so bootstrap it with
-   `machine_count` equal to `total_machines` directly in
-   `rotation.auto.tfvars.json` instead of going through the normal
-   0-then-cutover flow.
-2. **cutover** (gated behind the `citrix-cutover-approval` environment,
-   requires a manual approval) - the delivery group is reassigned: the new
-   catalog's `machine_count` ramps up (added to `associated_machine_catalogs`
-   for the first time), the outgoing catalog's drops to 0 (removed from
-   `associated_machine_catalogs`, per the filter above).
-3. **decommission** (gated behind `citrix-decommission-approval`) - once the
-   outgoing catalog is fully drained (`machine_count = 0`, already excluded
-   from the delivery group), its `citrix_machine_catalog`/`citrix_image_version`
-   are deleted.
+   `modules/citrix/main.tf` filters each delivery group's
+   `associated_machine_catalogs` down to only that environment's catalogs
+   with `machine_count > 0`; a label at 0 (freshly staged, or drained ahead
+   of decommission) simply isn't in the list. On top of that, the build
+   step's `terraform apply` is scoped with `-target` to just that
+   `(environment, label)` pair's `citrix_machine_catalog` (and the shared
+   `citrix_image_version`, keyed by label only), so it doesn't even attempt a
+   delivery-group update while staging. **Exception: the very first catalog
+   in a brand new environment** - there's no existing delivery group
+   association to attach a catalog to and no outgoing catalog to cut over
+   from, so bootstrap it with `machine_count` equal to `total_machines`
+   directly in `rotation.auto.tfvars.json` instead of going through the
+   normal 0-then-cutover flow. This applies independently the first time
+   each of dev/test/prod is stood up.
+2. **cutover** (gated behind the `citrix-cutover-approval-<environment>`
+   environment - e.g. `citrix-cutover-approval-prod` - requires a manual
+   approval, tunable per environment) - that environment's delivery group is
+   reassigned: the new catalog's `machine_count` ramps up (added to
+   `associated_machine_catalogs` for the first time), the outgoing catalog's
+   drops to 0 (removed from `associated_machine_catalogs`, per the filter
+   above). Other environments are untouched.
+3. **decommission** (gated behind `citrix-decommission-approval-<environment>`)
+   - once the outgoing catalog is fully drained (`machine_count = 0`,
+   already excluded from the delivery group) **in that environment**, its
+   `citrix_machine_catalog` and dedicated `azurerm_resource_group.vda` entry
+   are both deleted (Terraform's dependency graph destroys the catalog
+   before the resource group automatically, since the catalog references it).
+   The underlying `citrix_image_version` and Azure Compute Gallery image
+   version are only deleted if **no other environment** still references
+   that build label - since the image version is shared/deduped across
+   environments, deleting it out from under an environment still live on it
+   would break that environment. The workflow checks this before calling
+   `az sig image-version delete`. If a decommission apply hits a transient
+   conflict deleting the resource group (e.g. Citrix's own MCS cleanup still
+   finishing in the background), it's safe to just re-run - resource group
+   deletion cascades over anything left inside it regardless of Terraform's
+   own tracking, and destroys are idempotent.
 
 ## Machine identity and machine profile
 

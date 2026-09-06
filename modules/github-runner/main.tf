@@ -1,13 +1,29 @@
-# Self-hosted GitHub Actions runner VM, placed inside the same private subnet
-# as the Cloud Connectors so the .github/workflows/cloud-connectors.yml
-# workflow can reach them over WinRM to run the Ansible playbook in
-# ../../ansible - GitHub-hosted runners have no path into this private VNet.
+# Self-hosted GitHub Actions runner VM, placed inside the private VDA subnet
+# so .github/workflows/citrix-image-rotation.yml's Terraform/Packer steps can
+# reach resources in it - GitHub-hosted runners have no path into this
+# private VNet.
 #
 # This module only provisions the bare VM. Registering it with GitHub (runner
 # registration tokens are short-lived and deliberately kept out of Terraform
 # state/tfvars, consistent with how CITRIX_CLIENT_SECRET is handled in
 # providers.tf) is a manual one-time step - see
 # ../../environments/citrix-azure/bootstrap-github-runner-commands.txt.
+
+# Temporary, source-IP-scoped public IP for the one-time SSH registration
+# step in a subscription with no other connectivity path (Bastion/VPN/jump
+# host) - see var.enable_temporary_public_access. Requires a matching NSG
+# allow rule (modules/network's admin_ssh_source_cidr) to actually admit
+# traffic; this alone isn't sufficient since Azure evaluates subnet-level and
+# NIC-level NSGs independently.
+resource "azurerm_public_ip" "runner_temp" {
+  count               = var.enable_temporary_public_access ? 1 : 0
+  name                = "${var.name}-temp-pip"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  tags                = var.tags
+}
 
 resource "azurerm_network_interface" "runner" {
   name                = "${var.name}-nic"
@@ -19,6 +35,7 @@ resource "azurerm_network_interface" "runner" {
     name                          = "internal"
     subnet_id                     = var.subnet_id
     private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = var.enable_temporary_public_access ? one(azurerm_public_ip.runner_temp[*].id) : null
   }
 }
 

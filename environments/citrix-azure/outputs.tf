@@ -46,13 +46,18 @@ output "citrix_image_definition_id" {
 }
 
 output "citrix_machine_catalog_ids" {
-  description = "IDs of the machine catalogs, keyed by build label (e.g. \"2607-1\")"
+  description = "IDs of the machine catalogs, keyed by \"<environment>-<label>\" (e.g. \"dev-2607-1\")"
   value       = module.citrix.machine_catalog_ids
 }
 
-output "citrix_delivery_group_id" {
-  description = "ID of the delivery group desktops are published through"
-  value       = module.citrix.delivery_group_id
+output "citrix_vda_resource_group_names" {
+  description = "Names of the per-catalog-build resource groups holding MCS-provisioned VDA VMs/NICs/disks, keyed by \"<environment>-<label>\" (e.g. \"dev-2607-1\")"
+  value       = module.citrix.vda_resource_group_names
+}
+
+output "citrix_delivery_group_ids" {
+  description = "IDs of the delivery groups desktops are published through, keyed by environment (\"dev\"/\"test\"/\"prod\")"
+  value       = module.citrix.delivery_group_ids
 }
 
 output "github_runner_vm_name" {
@@ -63,6 +68,11 @@ output "github_runner_vm_name" {
 output "github_runner_private_ip_address" {
   description = "Private IP address of the self-hosted GitHub Actions runner VM"
   value       = module.github_runner.private_ip_address
+}
+
+output "github_runner_temporary_public_ip_address" {
+  description = "Temporary public IP address of the runner VM, if enable_runner_temporary_ssh_access is true - null otherwise"
+  value       = module.github_runner.temporary_public_ip_address
 }
 
 output "image_gallery_name" {

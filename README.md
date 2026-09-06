@@ -44,7 +44,9 @@ deployment on Azure, built following the
   connection app registration
 - [`modules/citrix`](modules/citrix/README.md) - Citrix Cloud resource
   location, zone, hypervisor, resource pool, image versioning, machine
-  catalogs, and delivery group
+  catalogs, and three delivery groups (Dev/Test/Prod). Each machine catalog
+  build gets its own dedicated Azure resource group so different
+  environments/rotation generations' VDA VMs/NICs/disks never share one.
 - [`modules/image-gallery`](modules/image-gallery/README.md) - Azure Shared
   Image Gallery + image definition for VDA master images
 - [`modules/artifact-storage`](modules/artifact-storage/README.md) - private
@@ -71,25 +73,29 @@ does.
 Scaffolding is in place for the full pipeline described in the
 [Citrix Automation Handbook, Part 5](https://community.citrix.com/tech-zone/automation/automation-handbook-2601-part5/):
 network, identity, image gallery, artifact storage, Citrix DaaS objects
-(including machine catalogs/delivery group), a self-hosted runner, and the
-monthly rotation workflow. Before any of it can actually run against real
-infrastructure, it needs:
+(including machine catalogs and three delivery groups - Dev/Test/Prod), a
+self-hosted runner, and the monthly rotation workflow. Before any of it can
+actually run against real infrastructure, it needs:
 
-- [ ] Azure subscription ID + tenant ID (Azure application piece)
+- [ ] Azure subscription ID + tenant ID for the **Lab** subscription this
+      demo deploys into (Azure application piece)
 - [ ] Citrix Cloud customer ID + API client ID/secret (Citrix Cloud auth)
 - [ ] Remote state backend details (`environments/citrix-azure/backend.tf`)
 - [ ] Naming/addressing decisions in `terraform.tfvars` (copy from
-      `terraform.tfvars.example`)
+      `terraform.tfvars.example`) - real Entra ID access group object IDs
+      for each of Dev/Test/Prod's `desktop_restricted_access_allow_list`
 - [ ] VDA installer + Citrix Optimizer download locations, and the
       version-matched scripts from `citrix-packer-tools` (see
       `packer/scripts/README.md`)
-- [ ] Real machine counts in `environments/citrix-azure/rotation.auto.tfvars.json`
-      (currently 0/0 placeholders)
+- [ ] `environments/citrix-azure/rotation.auto.tfvars.json` is seeded with
+      demo machine counts (Dev 3, Test 5, Prod 20) - adjust if the real
+      numbers for the talk differ
 - [ ] The GitHub repo secrets/variables listed below
-- [ ] A way to reach the private VDA/runner subnet to run the one-time
-      bootstrap steps (`bootstrap-github-runner-commands.txt`) - this repo
-      doesn't provision a Bastion/VPN; use whatever connectivity techops
-      already has, or set one up first
+- [ ] Run `bootstrap-github-runner-commands.txt`'s one-time registration
+      steps - this repo has no Bastion/VPN (nothing pre-exists in the Lab
+      subscription), so that file's step 0 temporarily opens a source-IP-scoped
+      public path in via `enable_runner_temporary_ssh_access` /
+      `admin_source_ip_cidr`, then closes it again once the runner is registered
 - [ ] Enable Rendezvous Protocol so VDAs register directly with Citrix Cloud
       (`citrix_policy_set` in the `citrix` Terraform provider, or a manual
       Citrix Cloud console policy) - not yet wired up
@@ -106,12 +112,20 @@ existing `fmt`/`validate`-only jobs need none of these.
 
 | Secret | Used by | Purpose |
 |---|---|---|
-| `ARM_CLIENT_ID` / `ARM_TENANT_ID` / `ARM_SUBSCRIPTION_ID` | `citrix-image-rotation.yml` | OIDC federated login (`azure/login`) for the `azurerm`/`azuread` providers and the Terraform state backend |
+| `ARM_CLIENT_ID` / `ARM_TENANT_ID` / `ARM_SUBSCRIPTION_ID` | `citrix-image-rotation.yml` | OIDC federated login (`azure/login`) for the `azurerm`/`azuread` providers and the Terraform state backend. For this demo, `ARM_SUBSCRIPTION_ID` (and the federated credential on the Entra ID app behind `ARM_CLIENT_ID`) must point at the **Lab** Azure subscription, not a production one - the whole environment (including the self-hosted runner VM) is provisioned there. |
 | `CITRIX_CLIENT_SECRET` | `citrix-image-rotation.yml` | Citrix Cloud API secret, read directly as an env var by `providers.tf` |
-| `TERRAFORM_TFVARS_JSON` | `citrix-image-rotation.yml` | Full JSON of everything in `terraform.tfvars.example` (this file is gitignored/local-only, so CI needs its own copy) |
+| `TERRAFORM_TFVARS_JSON` | `citrix-image-rotation.yml` | Full JSON of everything in `terraform.tfvars.example` (this file is gitignored/local-only, so CI needs its own copy) - now includes the `delivery_groups` map (Dev/Test/Prod names, published desktops, access lists, autoscale schedules) |
 | `PACKER_BUILD_VARS_JSON` | `citrix-image-rotation.yml` | Full JSON of everything in `packer/images/win11-azure.pkrvars.hcl.example` (same reasoning) |
+| `VDA_LOCAL_ADMIN_USERNAME` / `VDA_LOCAL_ADMIN_PASSWORD` | `citrix-image-rotation.yml` (`build` job) | Local admin credentials Packer sets on the VDA master image during the build |
 
 **Also required (not a GitHub secret/variable):** a required-reviewer rule on
-the `citrix-cutover-approval` and `citrix-decommission-approval` environments
-(repo Settings > Environments) - this is what gates those two rotation steps
-behind manual approval.
+each of the following environments (repo Settings > Environments) - **six**
+total, one pair per delivery-group environment, so Dev/Test can be
+lighter-gated or ungated while Prod requires a named reviewer:
+
+- `citrix-cutover-approval-dev`, `citrix-cutover-approval-test`, `citrix-cutover-approval-prod`
+- `citrix-decommission-approval-dev`, `citrix-decommission-approval-test`, `citrix-decommission-approval-prod`
+
+(`citrix-cutover-approval-prod` also gates the `apply` action, since an
+untargeted `terraform apply` can touch any environment's delivery-group
+config in one pass.)

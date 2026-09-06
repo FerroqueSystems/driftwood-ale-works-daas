@@ -15,10 +15,14 @@ following the
   principal (see [modules/identity](../../modules/identity/README.md)) that
   Citrix uses to manage Azure resources.
 - **Citrix DaaS objects**: resource location, zone, hypervisor, resource
-  pool, image versioning, machine catalogs, and delivery group (see
-  [modules/citrix](../../modules/citrix/README.md)), created via the
+  pool, image versioning, machine catalogs, and three delivery groups - Dev,
+  Test/QA, and Prod, each independently promoted off one shared golden image
+  (see [modules/citrix](../../modules/citrix/README.md)), created via the
   `citrix/citrix` Terraform provider. Machine identity is `AzureAD`
-  (Entra ID-joined) - no traditional AD domain.
+  (Entra ID-joined) - no traditional AD domain. Every machine catalog build
+  gets its own dedicated resource group for its MCS-provisioned VDA
+  VMs/NICs/disks, so different environments/rotation generations never share
+  one.
 - **No Cloud Connectors**: VDAs register with Citrix Cloud directly via
   Rendezvous Protocol instead of routing control/HDX traffic through Cloud
   Connector VMs (which also require traditional AD domain membership,
@@ -34,8 +38,9 @@ following the
   holds the Citrix VDA installer and Citrix Optimizer zip Packer downloads
   from.
 - **Monthly image rotation**: after each Patch Tuesday, a new golden image is
-  built, cut into a new machine catalog, phased into the delivery group, and
-  the old catalog/image decommissioned - see
+  built once and then cut into a new machine catalog, phased into the
+  delivery group, and the old catalog/image decommissioned - independently
+  per environment (dev first, then test, then prod) - see
   [modules/citrix's rotation section](../../modules/citrix/README.md#monthly-image-catalog-rotation)
   and [.github/workflows/citrix-image-rotation.yml](../../.github/workflows/citrix-image-rotation.yml).
 
@@ -52,8 +57,9 @@ following the
 - `terraform.tfvars.example` - template of values to fill in; copy to
   `terraform.tfvars` (gitignored) with real values
 - `rotation.auto.tfvars.json` - the git-tracked golden image/machine catalog
-  rotation state (`image_versions`) - see
-  [modules/citrix's rotation section](../../modules/citrix/README.md#monthly-image-catalog-rotation).
+  rotation state (`catalog_rotation`), nested per environment
+  (dev/test/prod) - see
+  [modules/citrix's rotation section](../../modules/citrix/README.md#monthly-image-catalog-rotation-per-environment).
   Edited by `.github/workflows/citrix-image-rotation.yml`, not by hand.
 - `bootstrap-github-runner-commands.txt` - one-time manual steps to register
   the self-hosted GitHub Actions runner (see
@@ -72,7 +78,10 @@ following the
    or `ARM_*` env vars) in your shell - do not put secrets in tfvars files.
 4. `terraform init && terraform plan`.
 5. Once applied, run `bootstrap-github-runner-commands.txt`'s steps to bring
-   up the self-hosted runner.
+   up the self-hosted runner - this is a fresh subscription with no
+   Bastion/VPN, so that file's first step temporarily opens a source-IP-scoped
+   path in (`enable_runner_temporary_ssh_access` / `admin_source_ip_cidr`)
+   just for the one-time registration, then closes it again.
 
 See the top-level README's secrets/variables list for what
 `.github/workflows/citrix-image-rotation.yml` needs configured in the GitHub

@@ -40,3 +40,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "admin_ssh_source_cidr" {
+  description = "CIDR allowed to SSH (TCP/22) into the VDA subnet, e.g. for one-time GitHub runner registration (see modules/github-runner) - null (default) adds no rule, leaving the subnet's implicit deny-all-inbound in place"
+  type        = string
+  default     = null
+}

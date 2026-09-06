@@ -10,6 +10,15 @@ vnet_name                   = "vnet-driftwood-citrix-daas"
 vnet_address_space          = ["10.50.0.0/16"]
 vda_subnet_address_prefixes = ["10.50.1.0/24"]
 
+# Leave both off by default - this subscription has no Bastion/VPN/jump host,
+# so there's normally no way to reach the runner VM's private IP at all.
+# Temporarily flip enable_runner_temporary_ssh_access to true + set your
+# current IP below only while registering the runner (see
+# bootstrap-github-runner-commands.txt), then set it back to false and
+# re-apply.
+enable_runner_temporary_ssh_access = false
+# admin_source_ip_cidr = "203.0.113.5/32"
+
 # --- Azure identity (from the techops Azure meeting) ---
 azure_subscription_id = "00000000-0000-0000-0000-000000000000"
 azure_tenant_id        = "00000000-0000-0000-0000-000000000000"
@@ -36,25 +45,95 @@ artifact_storage_account_name   = "driftwoodctximages"
 artifact_storage_container_name = "image-build-artifacts"
 
 # --- Golden image versioning / machine catalog rotation ---
-# image_versions is NOT set here - it's sourced from the git-tracked
+# catalog_rotation is NOT set here - it's sourced from the git-tracked
 # rotation.auto.tfvars.json (Terraform auto-loads *.auto.tfvars.json), which
-# the citrix-image-rotation workflow updates each month. See that file and
-# .github/workflows/citrix-image-rotation.yml. Do not also set image_versions
-# in your real terraform.tfvars - Terraform will error on the duplicate.
+# the citrix-image-rotation workflow updates each month, per environment. See
+# that file and .github/workflows/citrix-image-rotation.yml. Do not also set
+# catalog_rotation in your real terraform.tfvars - Terraform will error on
+# the duplicate.
 
-citrix_catalog_name_prefix   = "driftwood-win11-vda"
-citrix_delivery_group_name  = "driftwood-win11-desktops"
-citrix_allocation_type       = "Random"
-citrix_machine_naming_scheme = "driftwood-vda-##"
-citrix_vda_service_offering  = "Standard_D4s_v5"
-citrix_vda_storage_type      = "StandardSSD_LRS"
+citrix_allocation_type      = "Random"
+citrix_vda_service_offering = "Standard_D4s_v5"
+citrix_vda_storage_type     = "StandardSSD_LRS"
 
-# --- Delivery group: published desktop, access, autoscale ---
-citrix_published_desktop_name = "Windows 11 Entra Desktop"
-# Entra ID group object ID, wrapped in Citrix's "OID:/azuread/<object_id>" form.
-citrix_desktop_restricted_access_allow_list = ["OID:/azuread/00000000-0000-0000-0000-000000000000"]
-citrix_autoscale_enabled  = true
-citrix_autoscale_timezone = "Eastern Standard Time"
+# --- Delivery groups: one per environment (Dev/Test/Prod), each with its own
+# name, published desktop, access list, autoscale schedule, and the
+# catalog-naming conventions citrix-image-rotation.yml seeds new builds with.
+# Entra ID group object IDs below are placeholders - replace with the real
+# Dev/QA/Prod access group object IDs, wrapped in Citrix's
+# "OID:/azuread/<object_id>" form.
+delivery_groups = {
+  dev = {
+    name                                  = "Driftwood Ale Works - Development"
+    published_desktop_name                = "Driftwood Dev Desktop"
+    desktop_restricted_access_allow_list  = ["OID:/azuread/00000000-0000-0000-0000-000000000001"]
+    autoscale_enabled                     = true
+    autoscale_timezone                    = "Eastern Standard Time"
+    catalog_name_prefix                   = "driftwood-win11-dev"
+    machine_naming_scheme                 = "dw-dev-vda-##"
+    # Dev is self-service and cost-sensitive - narrow weekday ramp, nothing
+    # powered on outside business hours or on weekends.
+    power_time_schemes = [
+      {
+        days_of_week          = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        display_name          = "Dev weekday hours"
+        peak_time_ranges      = ["08:00-18:00"]
+        pool_using_percentage = true
+        pool_size_schedules = [
+          { time_range = "08:00-18:00", pool_size = 50 },
+        ]
+      }
+    ]
+  }
+
+  test = {
+    name                                  = "Driftwood Ale Works - QA Testing"
+    published_desktop_name                = "Driftwood QA Desktop"
+    desktop_restricted_access_allow_list  = ["OID:/azuread/00000000-0000-0000-0000-000000000002"]
+    autoscale_enabled                     = true
+    autoscale_timezone                    = "Eastern Standard Time"
+    catalog_name_prefix                   = "driftwood-win11-test"
+    machine_naming_scheme                 = "dw-test-vda-##"
+    # QA needs a slightly wider window than dev to cover test-cycle overlap
+    # with other time zones, still off outside business hours/weekends.
+    power_time_schemes = [
+      {
+        days_of_week          = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        display_name          = "QA weekday hours"
+        peak_time_ranges      = ["07:00-19:00"]
+        pool_using_percentage = true
+        pool_size_schedules = [
+          { time_range = "07:00-19:00", pool_size = 60 },
+        ]
+      }
+    ]
+  }
+
+  prod = {
+    name                                  = "Driftwood Ale Works - Production"
+    published_desktop_name                = "Driftwood Ale Works Desktop"
+    desktop_restricted_access_allow_list  = ["OID:/azuread/00000000-0000-0000-0000-000000000003"]
+    autoscale_enabled                     = true
+    autoscale_timezone                    = "Eastern Standard Time"
+    catalog_name_prefix                   = "driftwood-win11-prod"
+    machine_naming_scheme                 = "dw-prod-vda-##"
+    # Prod stays mostly on around the clock (never scales below a floor),
+    # with a modest peak-hours boost for the business day.
+    power_time_schemes = [
+      {
+        days_of_week          = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        display_name          = "Prod always-on with weekday peak"
+        peak_time_ranges      = ["08:00-18:00"]
+        pool_using_percentage = true
+        pool_size_schedules = [
+          { time_range = "00:00-08:00", pool_size = 40 },
+          { time_range = "08:00-18:00", pool_size = 100 },
+          { time_range = "18:00-24:00", pool_size = 40 },
+        ]
+      }
+    ]
+  }
+}
 
 # --- Self-hosted GitHub Actions runner (for citrix-image-rotation.yml) ---
 github_runner_name    = "driftwood-gh-runner"

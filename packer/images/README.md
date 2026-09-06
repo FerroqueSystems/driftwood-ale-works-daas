@@ -176,7 +176,7 @@ Chocolatey references:
 ## Example
 
 ```bash
-cd ~/clickops-to-gitops/images
+cd driftwood-ale-works-daas/packer/images
 packer init azure-windows-base.pkr.hcl
 packer build -var-file win11-azure.pkrvars.hcl azure-windows-base.pkr.hcl
 ```
