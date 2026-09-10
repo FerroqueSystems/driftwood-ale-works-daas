@@ -72,11 +72,12 @@ variable "subnets" {
 }
 
 # --- Golden image versioning (Citrix Image Management Service) ---
-# See environments/citrix-azure/README.md for the monthly rotation convention
-# this is built around - no technical limit on how many entries can coexist
-# per environment in var.catalog_rotation; scripts/rotate_image_versions.py
-# applies a soft, tunable cap per environment when staging new labels (see
-# modules/citrix/README.md).
+# See modules/citrix/README.md for the GitFlow-driven rotation convention
+# this is built around - no technical or configured limit on how many
+# entries can coexist per environment in var.catalog_rotation;
+# scripts/rotate_image_versions.py's check-outstanding subcommand warns
+# (never blocks) once too many accumulate, as a nudge to decommission
+# drained builds rather than a hard cap.
 
 variable "image_gallery_name" {
   description = "Name of the existing Azure Shared Image Gallery Packer publishes VDA master images into (see modules/image-gallery)"
@@ -107,7 +108,7 @@ variable "session_support" {
 }
 
 variable "catalog_rotation" {
-  description = "Per-environment golden image build/catalog rotation state, outer-keyed by environment (\"dev\"/\"test\"/\"prod\"), inner-keyed by the \"YYMM-N\" build label (e.g. \"2607-1\"). CI-managed - sourced from rotation.auto.tfvars.json (Terraform auto-loads *.auto.tfvars.json), not terraform.tfvars, since Terraform replaces (not deep-merges) a variable's value across auto-loaded tfvars files. Each environment's rotation state is fully independent (dev can be on a different label than prod) even though the same label means the same gallery_image_version everywhere - one shared Packer build feeds dev/test/prod alike; each environment cuts over to it on its own schedule. No hard limit on entry count per environment - scripts/rotate_image_versions.py's build command applies a soft, tunable cap when staging new labels."
+  description = "Per-environment golden image build/catalog rotation state, outer-keyed by environment (\"dev\"/\"test\"/\"prod\"), inner-keyed by a build label - either \"<branch-slug>-<short-sha>\" (GitFlow-triggered builds, e.g. \"add-widget-a1b2c3d\") or \"YYMM-N\" (manual workflow_dispatch builds, e.g. \"2607-1\") - both are just opaque string keys as far as this variable is concerned. CI-managed - sourced from rotation.auto.tfvars.json (Terraform auto-loads *.auto.tfvars.json), not terraform.tfvars, since Terraform replaces (not deep-merges) a variable's value across auto-loaded tfvars files. Each environment's rotation state is fully independent (dev can be on a different label than prod) even though the same label means the same gallery_image_version everywhere - one shared Packer build feeds dev/test/prod alike; each environment cuts over to it on its own schedule. No hard limit on entry count per environment - scripts/rotate_image_versions.py's check-outstanding subcommand warns (never blocks) once too many accumulate across all environments combined."
   type = map(map(object({
     gallery_image_version = string # Azure Compute Gallery numeric version this label maps to, e.g. "2607.1.0" - identical across every environment that has this label staged (enforced by the validation block below)
     total_machines        = number # machines provisioned in this catalog
@@ -125,7 +126,7 @@ variable "catalog_rotation" {
         ])) <= 1
       )
     ])
-    error_message = "Every environment that stages the same \"YYMM-N\" build label must agree on gallery_image_version - it's one shared golden-image lineage; two environments can't disagree on what that label points to (citrix_image_version is deduped across environments in main.tf and relies on this)."
+    error_message = "Every environment that stages the same build label must agree on gallery_image_version - it's one shared golden-image lineage; two environments can't disagree on what that label points to (citrix_image_version is deduped across environments in main.tf and relies on this)."
   }
 }
 

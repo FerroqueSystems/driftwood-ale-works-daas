@@ -8,9 +8,10 @@ deployment on Azure, built following the
 > Infrastructure Automation into a 'Paved Road' for Delivery Teams"** (World
 > of EUC Amplify, Milwaukee). Driftwood Ale Works is a fictional brewing
 > company used to illustrate what config drift looks like before GitOps/CI-CD,
-> and what a paved road looks like after - real Terraform modules, a gated
-> CI/CD pipeline (plan/apply approval gates, monthly image rotation), and the
-> kinds of provider quirks you actually hit running Citrix DaaS on Azure.
+> and what a paved road looks like after - real Terraform modules, a gated,
+> GitFlow-driven CI/CD pipeline (plan/apply approval gates, automatic
+> build/promote/drain on push), and the kinds of provider quirks you
+> actually hit running Citrix DaaS on Azure.
 
 ## Architecture decisions
 
@@ -36,6 +37,14 @@ deployment on Azure, built following the
 - **Golden image pipeline**: Packer builds the Windows VDA master image and
   publishes it to an Azure Shared Image Gallery, which the machine catalog
   references.
+- **GitFlow-driven rotation**: push to `feature/**`/`release/**`/`hotfix/**`
+  builds a new image and cuts Dev over to it automatically; merging into
+  `develop` promotes it to Test; merging into `main` promotes it to Prod and
+  drains the outgoing catalog (maintenance mode -> bounded wait -> power
+  off, not deleted). Manual `workflow_dispatch` actions remain for
+  out-of-band operations and for actually decommissioning a drained catalog.
+  See [modules/citrix's rotation section](modules/citrix/README.md#image-catalog-rotation-per-environment)
+  for the full model.
 
 ## Layout
 
@@ -74,8 +83,9 @@ deployment on Azure, built following the
   [environments/citrix-azure](environments/citrix-azure/README.md))
 - `.github/workflows/terraform.yml` - `terraform fmt`/`validate` on PRs
 - `.github/workflows/packer.yml` - `packer fmt`/`validate` on PRs
-- `.github/workflows/citrix-image-rotation.yml` - the monthly Patch-Tuesday
-  build/cutover/decommission pipeline
+- `.github/workflows/citrix-image-rotation.yml` - the GitFlow-driven
+  build/promote/drain pipeline (push-triggered) plus manual
+  build/cutover/decommission/apply actions (`workflow_dispatch`)
 
 ## Status / next steps
 
@@ -83,7 +93,7 @@ Scaffolding is in place for the full pipeline described in the
 [Citrix Automation Handbook, Part 5](https://community.citrix.com/tech-zone/automation/automation-handbook-2601-part5/):
 network, identity, a new AD DS forest, Cloud Connectors, image gallery,
 artifact storage, Citrix DaaS objects (including machine catalogs and three
-delivery groups - Dev/Test/Prod), a self-hosted runner, and the monthly
+delivery groups - Dev/Test/Prod), a self-hosted runner, and the GitFlow-driven
 rotation workflow. Before any of it can actually run against real
 infrastructure, it needs:
 
@@ -91,7 +101,9 @@ infrastructure, it needs:
       demo deploys into (Azure application piece)
 - [ ] Citrix Cloud customer ID + API client ID/secret (Citrix Cloud auth),
       plus a **second**, dedicated API client for Cloud Connector
-      registration (see `modules/cloud-connectors/README.md`)
+      registration (see `modules/cloud-connectors/README.md`) and a
+      **third** for the Prod drain/maintenance-mode script (see
+      `scripts/citrix_daas_maintenance.py` and the secrets table below)
 - [ ] Remote state backend details (`environments/citrix-azure/backend.tf`)
 - [ ] Naming/addressing decisions in `terraform.tfvars` (copy from
       `terraform.tfvars.example`) - AD domain/service-account/safe-mode
@@ -114,12 +126,19 @@ infrastructure, it needs:
       `modules/domain-controllers/README.md`'s "Automation, and its real
       risk" section. This is scripted end-to-end with no manual fallback and
       hasn't been exercised against real Azure/Citrix Cloud from this repo.
+- [ ] **Verify `scripts/citrix_daas_maintenance.py`'s Citrix DaaS REST API
+      calls against a real tenant** (or at least a non-prod catalog) before
+      the conference - the maintenance-mode/list-machines/power-action
+      endpoints could not be confirmed against live API reference docs when
+      this script was written; see the module docstring for exactly which
+      calls are lower-confidence.
 
 Remote PC / app publishing beyond desktops aren't in scope yet.
 
 ## GitHub repo secrets/variables
 
-Configure these under repo Settings before running
+Configure these under repo Settings before pushing to `feature/**`/
+`release/**`/`hotfix/**`/`develop`/`main`, or running
 `citrix-image-rotation.yml` manually. `terraform.yml` and `packer.yml`'s
 existing `fmt`/`validate`-only jobs need none of these.
 
@@ -129,6 +148,7 @@ existing `fmt`/`validate`-only jobs need none of these.
 |---|---|---|
 | `ARM_CLIENT_ID` / `ARM_TENANT_ID` / `ARM_SUBSCRIPTION_ID` | `citrix-image-rotation.yml` | OIDC federated login (`azure/login`) for the `azurerm`/`azuread` providers and the Terraform state backend. For this demo, `ARM_SUBSCRIPTION_ID` (and the federated credential on the Entra ID app behind `ARM_CLIENT_ID`) must point at the **Lab** Azure subscription, not a production one - the whole environment (including the self-hosted runner VM) is provisioned there. |
 | `CITRIX_CLIENT_SECRET` | `citrix-image-rotation.yml` | Citrix Cloud API secret for the Terraform provider itself, read directly as an env var by `providers.tf` |
+| `CITRIX_MAINTENANCE_CLIENT_ID` / `CITRIX_MAINTENANCE_CLIENT_SECRET` | `citrix-image-rotation.yml` (`promote-to-prod-and-drain` job) | A **third**, dedicated Citrix Cloud API client for `scripts/citrix_daas_maintenance.py`'s maintenance-mode/drain/power-off calls - deliberately separate from both `CITRIX_CLIENT_SECRET` (the Terraform provider's) and the Cloud Connector registration client, since this one can drain and power off live production VDAs |
 | `TERRAFORM_TFVARS_JSON` | `citrix-image-rotation.yml` | Full JSON of everything in `terraform.tfvars.example` (this file is gitignored/local-only, so CI needs its own copy) - now includes the `delivery_groups` map, AD domain/service-account/safe-mode passwords, domain controller/Cloud Connector local admin passwords, the dedicated Cloud Connector API client ID/secret, and the Cloud Connector installer's SAS URL |
 | `PACKER_BUILD_VARS_JSON` | `citrix-image-rotation.yml` | Full JSON of everything in `packer/images/win11-azure.pkrvars.hcl.example` (same reasoning) |
 | `VDA_LOCAL_ADMIN_USERNAME` / `VDA_LOCAL_ADMIN_PASSWORD` | `citrix-image-rotation.yml` (`build` job) | Local admin credentials Packer sets on the VDA master image during the build |
@@ -141,6 +161,7 @@ lighter-gated or ungated while Prod requires a named reviewer:
 - `citrix-cutover-approval-dev`, `citrix-cutover-approval-test`, `citrix-cutover-approval-prod`
 - `citrix-decommission-approval-dev`, `citrix-decommission-approval-test`, `citrix-decommission-approval-prod`
 
-(`citrix-cutover-approval-prod` also gates the `apply` action, since an
-untargeted `terraform apply` can touch any environment's delivery-group
-config in one pass.)
+(`citrix-cutover-approval-prod` also gates the `apply` action and the
+automatic `promote-to-prod-and-drain` job, since either can touch Prod - a
+push to `main` starts that job, but it still pauses for the environment's
+required reviewer before actually running.)

@@ -118,12 +118,13 @@ variable "citrix_resource_pool_name" {
 }
 
 # --- Golden image versioning / machine catalog rotation ---
-# See ../../modules/citrix/README.md for the monthly "YYMM-N" rotation
+# See ../../modules/citrix/README.md for the GitFlow-driven rotation
 # convention this drives. No hard entry-count limit per environment - see
-# scripts/rotate_image_versions.py's --max-entries.
+# scripts/rotate_image_versions.py's check-outstanding subcommand (warns,
+# never blocks).
 
 variable "catalog_rotation" {
-  description = "Per-environment golden image build/catalog rotation state, outer-keyed by environment (\"dev\"/\"test\"/\"prod\"), inner-keyed by the \"YYMM-N\" build label (e.g. \"2607-1\"). CI-managed - sourced from rotation.auto.tfvars.json, not terraform.tfvars."
+  description = "Per-environment golden image build/catalog rotation state, outer-keyed by environment (\"dev\"/\"test\"/\"prod\"), inner-keyed by a build label - either \"<branch-slug>-<short-sha>\" (GitFlow-triggered) or \"YYMM-N\" (manual). CI-managed - sourced from rotation.auto.tfvars.json, not terraform.tfvars."
   type = map(map(object({
     gallery_image_version = string
     total_machines        = number

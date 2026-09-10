@@ -42,7 +42,7 @@ following the
   built once and then cut into a new machine catalog, phased into the
   delivery group, and the old catalog/image decommissioned - independently
   per environment (dev first, then test, then prod) - see
-  [modules/citrix's rotation section](../../modules/citrix/README.md#monthly-image-catalog-rotation)
+  [modules/citrix's rotation section](../../modules/citrix/README.md#image-catalog-rotation-per-environment)
   and [.github/workflows/citrix-image-rotation.yml](../../.github/workflows/citrix-image-rotation.yml).
 - **Temporary demo environment, cost-guarded by default**: every
   Terraform-managed VM (domain controllers, Cloud Connectors, the GitHub
@@ -69,7 +69,7 @@ following the
 - `rotation.auto.tfvars.json` - the git-tracked golden image/machine catalog
   rotation state (`catalog_rotation`), nested per environment
   (dev/test/prod) - see
-  [modules/citrix's rotation section](../../modules/citrix/README.md#monthly-image-catalog-rotation-per-environment).
+  [modules/citrix's rotation section](../../modules/citrix/README.md#image-catalog-rotation-per-environment).
   Edited by `.github/workflows/citrix-image-rotation.yml`, not by hand.
 - `bootstrap-github-runner-commands.txt` - one-time manual steps to register
   the self-hosted GitHub Actions runner (see

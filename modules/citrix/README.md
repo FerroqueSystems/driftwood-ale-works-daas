@@ -33,35 +33,80 @@ Terraform provider:
   VMs/NICs/disks and can't collide or bleed into each other during
   cutover/decommission.
 
-## Monthly image/catalog rotation, per environment
+## Image/catalog rotation, per environment
 
 `var.catalog_rotation` is a map keyed by environment (`"dev"`/`"test"`/`"prod"`),
-each holding a map keyed by `"YYMM-N"` build label (e.g. `"2607-1"` for the
-first 2026-07 build) - each `(environment, label)` pair gets its own
-`citrix_machine_catalog`, assigned to that environment's delivery group with
-its own `machine_count`. Every environment's rotation state is fully
-independent - dev can be on a different label than prod, cut over on its own
-schedule - even though the same label always means the same underlying
-`gallery_image_version` everywhere it's staged (enforced by a `validation`
-block on `var.catalog_rotation`), since one shared Packer build feeds all
-three. There's no technical limit on how many entries can coexist per
-environment - `citrix_machine_catalog` is `for_each`-driven off the flattened
-map, and each delivery group's `associated_machine_catalogs` already filters
-to `machine_count > 0` regardless of total count.
-`scripts/rotate_image_versions.py`'s `build` command applies a soft cap
-(`--max-entries`, default 5, scoped per environment) against unbounded
-catalog sprawl when staging a *brand new* label in one environment -
-`cutover` and `decommission` aren't limited by it and can target any
-already-staged label in any environment at any time, which matters when
-multiple people are staging builds in parallel.
+each holding a map keyed by a build label - each `(environment, label)` pair
+gets its own `citrix_machine_catalog`, assigned to that environment's
+delivery group with its own `machine_count`. Every environment's rotation
+state is fully independent - dev can be on a different label than prod, cut
+over on its own schedule - even though the same label always means the same
+underlying `gallery_image_version` everywhere it's staged (enforced by a
+`validation` block on `var.catalog_rotation`), since one shared Packer
+build feeds all three. There's no technical limit on how many entries can
+coexist per environment - `citrix_machine_catalog` is `for_each`-driven off
+the flattened map, and each delivery group's `associated_machine_catalogs`
+already filters to `machine_count > 0` regardless of total count. There's
+also no hard *cap* on entry count anymore (a per-environment `--max-entries`
+hard block used to exist in `scripts/rotate_image_versions.py`'s `build`
+command - retired once builds moved from ~1/month to potentially many/day,
+see below - a hard block would have just broken iterative dev work).
+`rotate_image_versions.py check-outstanding` instead warns (never blocks)
+once more than 5 distinct labels are outstanding across all three
+environments combined, as a nudge to decommission drained builds.
+
+Two build labeling schemes coexist, both just opaque string keys as far as
+`catalog_rotation` is concerned:
+- **GitFlow-triggered builds** (see below) use `"<branch-slug>-<short-sha>"`
+  (e.g. `"add-widget-a1b2c3d"`).
+- **Manual `workflow_dispatch` builds** still use the original `"YYMM-N"`
+  convention (e.g. `"2607-1"` for the first 2026-07 build).
+
+Either way, the Azure Compute Gallery version is a **separate**, purely
+numeric value recorded alongside the label (`gallery_image_version`) - for
+GitFlow-triggered builds it's `"<YYYYMM>.<run_number>.0"` (computed by the
+workflow, unrelated to the label text); for manual builds it's still derived
+from the "YYMM-N" label itself. `cmd_decommission` in
+`rotate_image_versions.py` reads this value back out of the recorded
+rotation state rather than re-deriving it from the label string, since
+branch-slug labels don't encode a version the way "YYMM-N" labels do.
 
 This is driven end-to-end by
 [.github/workflows/citrix-image-rotation.yml](../../.github/workflows/citrix-image-rotation.yml)
-(which takes an `environment` input alongside `action`) and
-[scripts/rotate_image_versions.py](../../scripts/rotate_image_versions.py)
-(which takes a matching `--env`), both editing
+and [scripts/rotate_image_versions.py](../../scripts/rotate_image_versions.py),
+both editing
 [environments/citrix-azure/rotation.auto.tfvars.json](../../environments/citrix-azure/rotation.auto.tfvars.json)
-(the git-tracked source of `var.catalog_rotation`):
+(the git-tracked source of `var.catalog_rotation`). Two trigger models:
+
+**GitFlow (automatic, `push` triggers)** - the normal path:
+1. Push to any `feature/**`/`release/**`/`hotfix/**` branch -> Packer
+   builds a new golden image and Dev is cut over to it immediately, in one
+   job, no separate approval step in between (`citrix-cutover-approval-dev`
+   can have zero required reviewers configured in repo Settings, making this
+   effectively unattended).
+2. Push to `develop` (a working branch merged in) -> whatever's currently
+   live in Dev (`machine_count > 0` there) is promoted into Test - no new
+   Packer build, just staging + cutover against the already-published image.
+3. Push to `main` (develop merged in) -> same promotion pattern, Test into
+   Prod, then the outgoing Prod catalog is drained (maintenance mode ->
+   bounded wait for sessions to clear -> power off - see
+   `scripts/citrix_daas_maintenance.py`) rather than deleted immediately.
+   `citrix-cutover-approval-prod`'s required reviewer still applies here -
+   the push starts the job, but it pauses for approval before actually
+   cutting Prod over and draining the old catalog.
+
+Because both jobs 1-3 stage (`machine_count = 0`) and cut over
+(`machine_count = N`) entirely within the JSON file before Terraform ever
+runs once, a single **untargeted** `terraform apply` is safe for all three -
+there's no observable intermediate state where a delivery group would be
+asked to associate a catalog at `machine_count = 0` (Citrix's actual
+rejection case, see below). This generalizes what used to be a one-time
+"bootstrap a brand-new environment" exception into the normal shape for
+every automated promotion.
+
+**Manual (`workflow_dispatch`)** - for out-of-band operations (rebuilding
+one environment in isolation, or a deliberate "stage now, cut over later"
+flow with a real time gap for human review):
 
 1. **build** (unattended) - Packer publishes a new golden image version (or
    this step is skipped if another environment already published this exact
@@ -74,17 +119,12 @@ This is driven end-to-end by
    `modules/citrix/main.tf` filters each delivery group's
    `associated_machine_catalogs` down to only that environment's catalogs
    with `machine_count > 0`; a label at 0 (freshly staged, or drained ahead
-   of decommission) simply isn't in the list. On top of that, the build
-   step's `terraform apply` is scoped with `-target` to just that
+   of decommission) simply isn't in the list. Because this is a genuinely
+   separate CI job from cutover (with a real time gap for approval), its
+   `terraform apply` is scoped with `-target` to just that
    `(environment, label)` pair's `citrix_machine_catalog` (and the shared
    `citrix_image_version`, keyed by label only), so it doesn't even attempt a
-   delivery-group update while staging. **Exception: the very first catalog
-   in a brand new environment** - there's no existing delivery group
-   association to attach a catalog to and no outgoing catalog to cut over
-   from, so bootstrap it with `machine_count` equal to `total_machines`
-   directly in `rotation.auto.tfvars.json` instead of going through the
-   normal 0-then-cutover flow. This applies independently the first time
-   each of dev/test/prod is stood up.
+   delivery-group update while staging.
 2. **cutover** (gated behind the `citrix-cutover-approval-<environment>`
    environment - e.g. `citrix-cutover-approval-prod` - requires a manual
    approval, tunable per environment) - that environment's delivery group is
@@ -107,7 +147,10 @@ This is driven end-to-end by
    conflict deleting the resource group (e.g. Citrix's own MCS cleanup still
    finishing in the background), it's safe to just re-run - resource group
    deletion cascades over anything left inside it regardless of Terraform's
-   own tracking, and destroys are idempotent.
+   own tracking, and destroys are idempotent. This is the only path that
+   ever actually deletes a Prod catalog - the automatic push-triggered flow
+   only drains/powers it off (step 3 above), leaving decommission as a
+   later, deliberate, manual action.
 
 ## Machine identity
 

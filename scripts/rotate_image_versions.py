@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""Edits environments/citrix-azure/rotation.auto.tfvars.json for the monthly
-Patch-Tuesday image/machine-catalog rotation (see
+"""Edits environments/citrix-azure/rotation.auto.tfvars.json for the GitFlow-
+driven image/machine-catalog rotation (see
 .github/workflows/citrix-image-rotation.yml). catalog_rotation is nested per
 environment ("dev"/"test"/"prod") - each environment's rotation state
 (staged/live build labels, machine counts) is independent, even though the
-same "YYMM-N" label means the same underlying gallery_image_version in every
+same label means the same underlying gallery_image_version in every
 environment (one shared Packer build feeds all three; each environment cuts
-over to it on its own schedule). Caps how many simultaneous entries "build"
-will stage PER ENVIRONMENT (--max-entries, default 5) - purely a soft
-guardrail against unbounded catalog sprawl within one environment; cutover
-and decommission both operate per-label regardless of how many entries
-exist, and one environment's entry count never affects another's cap.
+over to it on its own schedule - dev automatically on every push to a
+working branch, test on merge to develop, prod on merge to main).
+
+There is no cap on how many entries can accumulate in one environment
+(there used to be a per-environment --max-entries hard block; retired since
+GitFlow-triggered builds can create many more labels per day than the old
+~monthly cadence did, and a hard block would just break iterative dev work).
+Use `check-outstanding` instead - it warns (never blocks) when too many
+labels are outstanding system-wide, as a nudge to decommission drained
+builds rather than a gate.
 """
 import argparse
 import json
+import os
 import sys
 
 ENVIRONMENTS = ["dev", "test", "prod"]
@@ -30,15 +36,17 @@ def save(path, data):
         f.write("\n")
 
 
+def write_github_output(values):
+    gh_output = os.environ.get("GITHUB_OUTPUT")
+    if not gh_output:
+        return
+    with open(gh_output, "a") as f:
+        for key, value in values.items():
+            f.write(f"{key}={value}\n")
+
+
 def cmd_build(args, data):
     env_versions = data["catalog_rotation"].setdefault(args.env, {})
-    if len(env_versions) >= args.max_entries and args.label not in env_versions:
-        sys.exit(
-            f"refusing to add '{args.label}' to {args.env}: {len(env_versions)} "
-            f"entries already present in {args.env} "
-            f"({', '.join(env_versions)}) - max_entries is {args.max_entries}. "
-            "Decommission an outgoing build first, or raise --max-entries."
-        )
     # Preserve machine_count/machine_naming_scheme/catalog_name if this
     # (env, label) pair already exists (e.g. re-running build to refresh an
     # already-live catalog's image/total_machines) - changing naming_scheme
@@ -77,7 +85,55 @@ def cmd_decommission(args, data):
             f"{env_versions[args.label]['machine_count']}, not 0 - run the cutover "
             "action first and confirm sessions have drained"
         )
-    del env_versions[args.label]
+    removed = env_versions.pop(args.label)
+    # The workflow needs this to delete the underlying Azure Compute Gallery
+    # image version - previously re-derived from the label string itself
+    # ("YYMM-N" -> "YYMM.N.0"), which breaks now that labels are branch-slug
+    # based and no longer encode a derivable version. Read it back from the
+    # rotation state instead, which has always recorded it authoritatively.
+    write_github_output({"gallery_image_version": removed["gallery_image_version"]})
+
+
+def cmd_current_live(args, data):
+    env_versions = data["catalog_rotation"].get(args.env, {})
+    live = {
+        label: v
+        for label, v in env_versions.items()
+        if v["machine_count"] > 0 and label != args.exclude
+    }
+    if len(live) > 1:
+        sys.exit(
+            f"more than one label is live in {args.env} simultaneously ({list(live)}) - "
+            "this shouldn't happen outside a mid-cutover race, refusing to guess"
+        )
+    if not live:
+        if args.required:
+            sys.exit(f"nothing is currently live in {args.env} - nothing to promote")
+        return
+    label, v = next(iter(live.items()))
+    write_github_output(
+        {
+            "label": label,
+            "gallery_image_version": v["gallery_image_version"],
+            "catalog_name": v["catalog_name"],
+        }
+    )
+
+
+def cmd_check_outstanding(args, data):
+    labels = sorted({label for env_map in data["catalog_rotation"].values() for label in env_map})
+    print(f"{len(labels)} distinct image label(s) outstanding across dev/test/prod: {', '.join(labels) or '(none)'}")
+    if len(labels) <= args.threshold:
+        return
+    msg = (
+        f"{len(labels)} distinct image labels are currently outstanding across dev/test/prod "
+        f"(threshold {args.threshold}): {', '.join(labels)} - consider decommissioning drained builds."
+    )
+    print(f"::warning::{msg}")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as f:
+            f.write(f"\n**Outstanding image labels warning:** {msg}\n")
 
 
 def main():
@@ -100,12 +156,6 @@ def main():
         required=True,
         help="machine catalog is named '<prefix>-<label>' for a brand new (env, label) pair - ignored if it already exists",
     )
-    build.add_argument(
-        "--max-entries",
-        type=int,
-        default=5,
-        help="refuse to stage a brand new label once this environment already has this many entries (default 5, applied per environment) - existing labels can always be re-built/cut over/decommissioned regardless of this cap",
-    )
     build.set_defaults(func=cmd_build)
 
     cutover = sub.add_parser("cutover", help="ramp the new label up, the old label down to 0, within one environment")
@@ -120,11 +170,38 @@ def main():
     decommission.add_argument("--label", required=True)
     decommission.set_defaults(func=cmd_decommission)
 
+    current_live = sub.add_parser(
+        "current-live",
+        help="find the label currently live (machine_count > 0) in one environment, for promoting it into another",
+    )
+    current_live.add_argument("--env", required=True, choices=ENVIRONMENTS)
+    current_live.add_argument(
+        "--exclude",
+        default=None,
+        help="ignore this label even if live - used when looking up an outgoing label to phase out, so promoting a label into an environment it's already live in doesn't treat itself as the thing to drain",
+    )
+    current_live.add_argument(
+        "--required",
+        action="store_true",
+        help="exit non-zero if nothing is live - use when looking up a source to promote from (must exist); omit when looking up an outgoing label to phase out (may legitimately be none)",
+    )
+    current_live.set_defaults(func=cmd_current_live)
+
+    check_outstanding = sub.add_parser(
+        "check-outstanding",
+        help="warn (never block) if more than --threshold distinct image labels are outstanding across all environments",
+    )
+    check_outstanding.add_argument("--threshold", type=int, default=5)
+    check_outstanding.set_defaults(func=cmd_check_outstanding)
+
     args = parser.parse_args()
     data = load(args.file)
     data.setdefault("catalog_rotation", {env: {} for env in ENVIRONMENTS})
     args.func(args, data)
-    save(args.file, data)
+    # current-live/check-outstanding are read-only - never write the file
+    # back for those (avoids an unnecessary, unchanged git diff).
+    if args.action not in ("current-live", "check-outstanding"):
+        save(args.file, data)
     print(json.dumps(data, indent=2))
 
 

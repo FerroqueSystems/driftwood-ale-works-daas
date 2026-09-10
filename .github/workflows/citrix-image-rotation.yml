@@ -1,42 +1,68 @@
 name: citrix-image-rotation
 
-# Monthly Patch-Tuesday golden image / machine catalog rotation, run
-# independently per environment (dev/test/prod - the "environment" input).
-# Manually triggered after Patch Tuesday's updates are ready - not scheduled.
-# One shared Packer build feeds all three environments; each is cut over to
-# it on its own schedule (dev first, then test, then prod), which is why
-# every job below takes an "environment" input. "build" refuses to stage a
-# brand new label in an environment once that environment's entry in
-# environments/citrix-azure/rotation.auto.tfvars.json's catalog_rotation
-# already has --max-entries entries (default 5, a soft guardrail against
-# unbounded catalog sprawl, scoped per environment - tune it as each team's
-# build cadence changes) - see scripts/rotate_image_versions.py and
-# modules/citrix/README.md. cutover and decommission aren't limited by this
-# and can target any label already staged in that environment.
+# GitFlow-driven golden image / machine catalog rotation, run independently
+# per environment (dev/test/prod). One shared Packer build feeds all three
+# environments; each cuts over to it on its own schedule:
 #
-# - build: unattended. Publishes a new Packer image version (skipped if
-#   another environment already published this exact version) and stages a
-#   new machine catalog in the chosen environment (machine_count 0 -
-#   provisioned but not serving sessions).
-# - cutover: gated behind the "citrix-cutover-approval-<environment>"
-#   environment (add a required reviewer to each in repo Settings >
-#   Environments - dev/test can be lighter-gated or ungated, prod should
-#   require a named reviewer). Reassigns desktops from the outgoing catalog
-#   to the new one within that environment's delivery group.
-# - decommission: gated behind "citrix-decommission-approval-<environment>".
-#   Deletes the fully-drained outgoing catalog/image version from that
-#   environment, and - only if no other environment still references the
-#   same build label - the underlying Azure Compute Gallery image version
-#   Packer published too (citrix_image_version only references that by
-#   pointer - terraform apply alone never deletes it, and it's deduped
-#   across environments, see modules/citrix/main.tf).
-# - apply: gated behind "citrix-cutover-approval-prod" (the strictest tier,
-#   since an untargeted apply can touch any environment's delivery-group
-#   config in one pass). Plain `terraform apply` with no
-#   rotation.auto.tfvars.json change - for delivery-group config (published
-#   desktop name, restricted access, autoscale schedule) that isn't part of
-#   the monthly rotation state machine and has no other in-CI path to get
-#   applied. Ignores the "environment" input.
+# - Push to any feature/**, release/**, or hotfix/** branch -> build-and-
+#   dev-cutover: builds a new golden image and immediately cuts Dev over to
+#   it, fully automatic (see "Approval gates" below for what "automatic"
+#   actually means once a required-reviewer environment is involved).
+# - Push to develop (a working branch merged in) -> promote-to-test:
+#   promotes whatever's currently live in Dev into Test - no new Packer
+#   build, just staging + cutover against the already-published image.
+# - Push to main (develop merged in) -> promote-to-prod-and-drain: same
+#   promotion pattern, Test into Prod, then drains the outgoing Prod
+#   catalog (maintenance mode -> bounded wait for sessions to clear ->
+#   power off - see scripts/citrix_daas_maintenance.py) rather than
+#   deleting it. Actual decommission of a drained catalog stays a separate,
+#   later, manual step (below) - this only retires it from serving traffic.
+# - workflow_dispatch actions (build/cutover/decommission/apply) remain for
+#   manual, out-of-band operations - e.g. rebuilding one environment
+#   in isolation, or the two-phase "stage now, cut over later" flow that
+#   only really makes sense with a human in the loop between the two steps.
+#
+# Image labels are "<branch-slug>-<short-sha>" (e.g. "add-widget-a1b2c3d"),
+# computed by the push-triggered jobs - NOT the "YYMM-N" scheme the manual
+# workflow_dispatch build/cutover/decommission actions still use for their
+# own inputs (both schemes coexist fine - catalog_rotation's entries are
+# just opaque string keys either way). The corresponding Azure Compute
+# Gallery version is a SEPARATE, purely numeric value
+# ("<YYYYMM>.<run_number>.0") - no longer derived from the label string,
+# since branch-slug labels aren't numeric. See
+# scripts/rotate_image_versions.py's module docstring and
+# modules/citrix/README.md for the full rotation-state model.
+#
+# There's no hard cap on how many labels can accumulate in one environment
+# (the old --max-entries per-environment block was retired - it made sense
+# at ~1 build/month, not at "every push"). Every job that touches
+# catalog_rotation instead runs `check-outstanding`, which warns (never
+# blocks) once more than 5 distinct labels are outstanding across all three
+# environments combined - a nudge to decommission drained builds, not a
+# gate.
+#
+# Approval gates: "cutover"-family jobs (including the three automatic ones
+# above) run under environment: citrix-cutover-approval-<env>. Add a
+# required reviewer to each in repo Settings > Environments - dev/test can
+# be lighter-gated or ungated (so pushes to working branches/develop really
+# do run unattended), prod should require a named reviewer. That means
+# promote-to-prod-and-drain, despite triggering automatically on push to
+# main, still pauses for that reviewer's approval before actually cutting
+# Prod over and draining the old catalog - merging to main starts the
+# pipeline, it doesn't bypass the human check.
+# "decommission" is gated behind citrix-decommission-approval-<environment>.
+# Deletes the fully-drained outgoing catalog/image version from that
+# environment, and - only if no other environment still references the
+# same build label - the underlying Azure Compute Gallery image version
+# Packer published too (citrix_image_version only references that by
+# pointer - terraform apply alone never deletes it, and it's deduped across
+# environments, see modules/citrix/main.tf).
+# "apply" is gated behind citrix-cutover-approval-prod (the strictest tier,
+# since an untargeted apply can touch any environment's delivery-group
+# config in one pass). Plain `terraform apply` with no
+# rotation.auto.tfvars.json change - for delivery-group config (published
+# desktop name, restricted access, autoscale schedule) that isn't part of
+# the rotation state machine and has no other in-CI path to get applied.
 #
 # This workflow needs the full non-secret environment config (everything in
 # terraform.tfvars.example) and the Packer build vars (everything in
@@ -45,7 +71,8 @@ name: citrix-image-rotation
 # repo variables, it decodes two JSON secrets - TERRAFORM_TFVARS_JSON and
 # PACKER_BUILD_VARS_JSON - into gitignored *.auto.tfvars.json /
 # *.auto.pkrvars.json files at runtime. See the top-level README's secrets
-# list for what each must contain.
+# list for what each must contain, including the new
+# CITRIX_MAINTENANCE_CLIENT_ID/_SECRET the drain step needs.
 
 on:
   workflow_dispatch:
@@ -72,6 +99,21 @@ on:
       machine_count:
         description: "cutover only: number of machines to assign to the new catalog in the delivery group"
         required: false
+  push:
+    branches:
+      - "feature/**"
+      - "release/**"
+      - "hotfix/**"
+      - develop
+      - main
+
+concurrency:
+  group: citrix-image-rotation-${{ github.ref }}
+  # Never cancel mid-Packer-build or mid-`terraform apply` - either can
+  # leave Azure/Citrix resources half-provisioned. Queue instead; push
+  # triggers can fire in rapid bursts in a way manual, human-paced dispatch
+  # never did.
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -80,10 +122,17 @@ permissions:
 env:
   TF_WORKDIR: environments/citrix-azure
   ROTATION_FILE: environments/citrix-azure/rotation.auto.tfvars.json
+  # Fixed per-environment machine counts for the automatic push-triggered
+  # jobs, since there's no human filling in a workflow_dispatch input for
+  # those - matches the demo counts already seeded in rotation.auto.tfvars.json.
+  DEV_TOTAL_MACHINES: 3
+  TEST_TOTAL_MACHINES: 5
+  PROD_TOTAL_MACHINES: 20
+  OUTSTANDING_IMAGE_LABEL_THRESHOLD: 5
 
 jobs:
   build:
-    if: inputs.action == 'build'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'build'
     runs-on: ubuntu-latest
     environment: techops-monthly-daas
     steps:
@@ -224,8 +273,11 @@ jobs:
             -target="module.citrix.citrix_image_version.vda[\"${{ inputs.image_label }}\"]" \
             -target="module.citrix.citrix_machine_catalog.vda[\"${{ inputs.environment }}-${{ inputs.image_label }}\"]"
 
+      - name: Check outstanding image labels
+        run: python3 scripts/rotate_image_versions.py "$ROTATION_FILE" check-outstanding --threshold "$OUTSTANDING_IMAGE_LABEL_THRESHOLD"
+
   cutover:
-    if: inputs.action == 'cutover'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'cutover'
     runs-on: ubuntu-latest
     environment: citrix-cutover-approval-${{ inputs.environment }}
     steps:
@@ -274,8 +326,11 @@ jobs:
           terraform init
           terraform apply -auto-approve
 
+      - name: Check outstanding image labels
+        run: python3 scripts/rotate_image_versions.py "$ROTATION_FILE" check-outstanding --threshold "$OUTSTANDING_IMAGE_LABEL_THRESHOLD"
+
   decommission:
-    if: inputs.action == 'decommission'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'decommission'
     runs-on: ubuntu-latest
     environment: citrix-decommission-approval-${{ inputs.environment }}
     steps:
@@ -340,13 +395,15 @@ jobs:
       # doesn't own that Azure resource's lifecycle, since Packer publishes
       # gallery image versions directly, outside Terraform. So the apply
       # above never deletes the underlying gallery image version - it just
-      # accumulates forever unless removed here explicitly.
+      # accumulates forever unless removed here explicitly. gallery_image_version
+      # comes from the rotation state itself (via the decommission step's
+      # output above), not re-derived from the label string - labels aren't
+      # guaranteed to encode a version anymore (see the push-triggered jobs'
+      # branch-slug labels below).
       - name: Delete the Azure Compute Gallery image version
         if: steps.decommission.outputs.still_referenced != 'true'
         working-directory: ${{ env.TF_WORKDIR }}
         run: |
-          IFS='-' read -r ym n <<< "${{ inputs.image_label }}"
-          gallery_version="${ym}.${n}.0"
           rg=$(python3 -c "import json; print(json.load(open('ci.auto.tfvars.json'))['resource_group_name'])")
           gallery=$(python3 -c "import json; print(json.load(open('ci.auto.tfvars.json'))['gallery_name'])")
           definition=$(python3 -c "import json; print(json.load(open('ci.auto.tfvars.json'))['image_definition_name'])")
@@ -354,7 +411,10 @@ jobs:
             --resource-group "$rg" \
             --gallery-name "$gallery" \
             --gallery-image-definition "$definition" \
-            --gallery-image-version "$gallery_version"
+            --gallery-image-version "${{ steps.decommission.outputs.gallery_image_version }}"
+
+      - name: Check outstanding image labels
+        run: python3 scripts/rotate_image_versions.py "$ROTATION_FILE" check-outstanding --threshold "$OUTSTANDING_IMAGE_LABEL_THRESHOLD"
 
   # Split into a plan job and an apply job that applies exactly the saved
   # plan, both gated behind citrix-cutover-approval-prod (the strictest
@@ -371,7 +431,7 @@ jobs:
   # job, so plan can't be made to run unattended while still using these
   # credentials.)
   plan:
-    if: inputs.action == 'apply'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
     runs-on: ubuntu-latest
     environment: citrix-cutover-approval-prod
     steps:
@@ -407,7 +467,7 @@ jobs:
           retention-days: 1
 
   apply:
-    if: inputs.action == 'apply'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
     needs: plan
     runs-on: ubuntu-latest
     environment: citrix-cutover-approval-prod
@@ -440,3 +500,369 @@ jobs:
         run: |
           terraform init
           terraform apply tfplan
+
+  build-and-dev-cutover:
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/feature/') || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/hotfix/'))
+    runs-on: ubuntu-latest
+    environment: citrix-cutover-approval-dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Write Terraform vars
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+
+      # Branch-slug + short-SHA label, decoupled from the Azure Compute
+      # Gallery version below - see this workflow's header comment. The
+      # slug's length budget is computed against dev's actual
+      # catalog_name_prefix (catalog names are "<prefix>-<label>") rather
+      # than a flat constant. Citrix's actual machine-catalog name limit
+      # isn't published/confirmed anywhere we could find - 64 is a
+      # conservative, commonly-cited Citrix object-name ceiling; adjust
+      # this constant if a real test proves otherwise.
+      - name: Compute image label and gallery version
+        id: version
+        run: |
+          catalog_name_prefix=$(python3 -c "
+          import json
+          cfg = json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))
+          print(cfg['delivery_groups']['dev']['catalog_name_prefix'])
+          ")
+          branch="${GITHUB_REF#refs/heads/}"
+          slug=$(printf '%s' "$branch" \
+            | sed -E 's#^(feature|release|hotfix)/##' \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+          [ -z "$slug" ] && slug="branch"
+          sha="${GITHUB_SHA:0:7}"
+          budget=$(( 64 - ${#catalog_name_prefix} - 2 - ${#sha} ))
+          if [ "${#slug}" -gt "$budget" ] && [ "$budget" -gt 0 ]; then
+            slug=$(printf '%s' "$slug" | cut -c1-"$budget" | sed -E 's/-+$//')
+          fi
+          echo "image_label=${slug}-${sha}" >> "$GITHUB_OUTPUT"
+          echo "gallery_version=$(date +%Y%m).${{ github.run_number }}.0" >> "$GITHUB_OUTPUT"
+
+      # Packer only publishes a new image *version* into an already-existing
+      # Shared Image Gallery/image definition - see the manual "build" job's
+      # identical step above for why this is scoped to just module.image_gallery.
+      - name: terraform apply (ensure prerequisites exist before the image build)
+        working-directory: ${{ env.TF_WORKDIR }}
+        env:
+          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+        run: |
+          terraform init
+          terraform apply -auto-approve -target=module.image_gallery
+
+      - uses: hashicorp/setup-packer@main
+        with:
+          version: latest
+
+      - name: Write Packer build vars
+        working-directory: packer/images
+        run: echo '${{ secrets.PACKER_BUILD_VARS_JSON }}' > ci.auto.pkrvars.json
+
+      - name: Check whether this image version was already published
+        id: image_check
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: |
+          rg=$(python3 -c "import json; print(json.load(open('ci.auto.tfvars.json'))['resource_group_name'])")
+          gallery=$(python3 -c "import json; print(json.load(open('ci.auto.tfvars.json'))['gallery_name'])")
+          definition=$(python3 -c "import json; print(json.load(open('ci.auto.tfvars.json'))['image_definition_name'])")
+          if az sig image-version show --resource-group "$rg" --gallery-name "$gallery" \
+              --gallery-image-definition "$definition" \
+              --gallery-image-version "${{ steps.version.outputs.gallery_version }}" \
+              --query id -o tsv 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the golden image
+        if: steps.image_check.outputs.exists != 'true'
+        working-directory: packer/images
+        env:
+          LOCAL_ADMIN_USERNAME: ${{ secrets.VDA_LOCAL_ADMIN_USERNAME }}
+          LOCAL_ADMIN_PASSWORD: ${{ secrets.VDA_LOCAL_ADMIN_PASSWORD }}
+        run: |
+          packer init azure-windows-base.pkr.hcl
+          packer build \
+            -var-file=ci.auto.pkrvars.json \
+            -var "gallery_image_version=${{ steps.version.outputs.gallery_version }}" \
+            -var "local_admin_username=$LOCAL_ADMIN_USERNAME" \
+            -var "local_admin_password=$LOCAL_ADMIN_PASSWORD" \
+            azure-windows-base.pkr.hcl
+
+      - name: Stage the new machine catalog (machine_count 0)
+        run: |
+          naming_scheme=$(python3 -c "
+          import json
+          cfg = json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))
+          print(cfg['delivery_groups']['dev']['machine_naming_scheme'])
+          ")
+          catalog_name_prefix=$(python3 -c "
+          import json
+          cfg = json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))
+          print(cfg['delivery_groups']['dev']['catalog_name_prefix'])
+          ")
+          python3 scripts/rotate_image_versions.py "$ROTATION_FILE" build \
+            --env dev \
+            --label "${{ steps.version.outputs.image_label }}" \
+            --gallery-version "${{ steps.version.outputs.gallery_version }}" \
+            --total-machines "$DEV_TOTAL_MACHINES" \
+            --naming-scheme "$naming_scheme" \
+            --catalog-name-prefix "$catalog_name_prefix"
+
+      - name: Find dev's outgoing label, if any
+        id: outgoing
+        run: python3 scripts/rotate_image_versions.py "$ROTATION_FILE" current-live --env dev --exclude "${{ steps.version.outputs.image_label }}"
+
+      - name: Cut dev over to the new catalog
+        run: |
+          python3 scripts/rotate_image_versions.py "$ROTATION_FILE" cutover \
+            --env dev \
+            --new-label "${{ steps.version.outputs.image_label }}" \
+            --machine-count "$DEV_TOTAL_MACHINES" \
+            ${{ steps.outgoing.outputs.label != '' && format('--old-label {0}', steps.outgoing.outputs.label) || '' }}
+
+      - name: Commit the rotation state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$ROTATION_FILE"
+          if git diff --staged --quiet; then
+            echo "No changes to $ROTATION_FILE, skipping commit"
+          else
+            git commit -m "citrix-image-rotation: dev build+cutover to ${{ steps.version.outputs.image_label }}"
+            git pull --rebase
+            git push
+          fi
+
+      # ONE untargeted apply - safe here (unlike the manual build job's
+      # careful -target scoping) because both the staging (machine_count=0)
+      # and cutover (machine_count=N) edits already landed in the JSON
+      # above, before Terraform ever runs. There's no intermediate state
+      # where the delivery group would be asked to associate a catalog at
+      # machine_count=0 (Citrix's actual rejection case) - Terraform only
+      # ever sees the final, already-cut-over contents.
+      - name: terraform apply
+        working-directory: ${{ env.TF_WORKDIR }}
+        env:
+          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+        run: terraform apply -auto-approve
+
+      - name: Check outstanding image labels
+        run: python3 scripts/rotate_image_versions.py "$ROTATION_FILE" check-outstanding --threshold "$OUTSTANDING_IMAGE_LABEL_THRESHOLD"
+
+  promote-to-test:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: citrix-cutover-approval-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Write Terraform vars
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+
+      # No Packer build here - the image being promoted is already
+      # published (dev already cut over to it). This job only stages+cuts
+      # over test to reference the same, already-existing gallery image
+      # version. The triggering push's own SHA (a merge commit on develop)
+      # is unrelated to the label that was computed on the original feature
+      # branch - so this looks up "what's currently live in dev" instead of
+      # recomputing anything from its own git context.
+      - name: Find what's currently live in dev
+        id: source
+        run: python3 scripts/rotate_image_versions.py "$ROTATION_FILE" current-live --env dev --required
+
+      - name: Stage the promoted label in test (machine_count starts 0)
+        run: |
+          naming_scheme=$(python3 -c "
+          import json
+          cfg = json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))
+          print(cfg['delivery_groups']['test']['machine_naming_scheme'])
+          ")
+          catalog_name_prefix=$(python3 -c "
+          import json
+          cfg = json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))
+          print(cfg['delivery_groups']['test']['catalog_name_prefix'])
+          ")
+          python3 scripts/rotate_image_versions.py "$ROTATION_FILE" build \
+            --env test \
+            --label "${{ steps.source.outputs.label }}" \
+            --gallery-version "${{ steps.source.outputs.gallery_image_version }}" \
+            --total-machines "$TEST_TOTAL_MACHINES" \
+            --naming-scheme "$naming_scheme" \
+            --catalog-name-prefix "$catalog_name_prefix"
+
+      - name: Find test's outgoing label, if any
+        id: outgoing
+        run: python3 scripts/rotate_image_versions.py "$ROTATION_FILE" current-live --env test --exclude "${{ steps.source.outputs.label }}"
+
+      - name: Cut test over to the promoted label
+        run: |
+          python3 scripts/rotate_image_versions.py "$ROTATION_FILE" cutover \
+            --env test \
+            --new-label "${{ steps.source.outputs.label }}" \
+            --machine-count "$TEST_TOTAL_MACHINES" \
+            ${{ steps.outgoing.outputs.label != '' && format('--old-label {0}', steps.outgoing.outputs.label) || '' }}
+
+      - name: Commit the rotation state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$ROTATION_FILE"
+          if git diff --staged --quiet; then
+            echo "No changes to $ROTATION_FILE, skipping commit"
+          else
+            git commit -m "citrix-image-rotation: promote ${{ steps.source.outputs.label }} to test"
+            git pull --rebase
+            git push
+          fi
+
+      # Single untargeted apply - same "no observable intermediate zero
+      # state" reasoning as build-and-dev-cutover above.
+      - name: terraform apply
+        working-directory: ${{ env.TF_WORKDIR }}
+        env:
+          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+        run: |
+          terraform init
+          terraform apply -auto-approve
+
+      - name: Check outstanding image labels
+        run: python3 scripts/rotate_image_versions.py "$ROTATION_FILE" check-outstanding --threshold "$OUTSTANDING_IMAGE_LABEL_THRESHOLD"
+
+  promote-to-prod-and-drain:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: citrix-cutover-approval-prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Write Terraform vars
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+
+      - name: Find what's currently live in test
+        id: source
+        run: python3 scripts/rotate_image_versions.py "$ROTATION_FILE" current-live --env test --required
+
+      - name: Stage the promoted label in prod (machine_count starts 0)
+        run: |
+          naming_scheme=$(python3 -c "
+          import json
+          cfg = json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))
+          print(cfg['delivery_groups']['prod']['machine_naming_scheme'])
+          ")
+          catalog_name_prefix=$(python3 -c "
+          import json
+          cfg = json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))
+          print(cfg['delivery_groups']['prod']['catalog_name_prefix'])
+          ")
+          python3 scripts/rotate_image_versions.py "$ROTATION_FILE" build \
+            --env prod \
+            --label "${{ steps.source.outputs.label }}" \
+            --gallery-version "${{ steps.source.outputs.gallery_image_version }}" \
+            --total-machines "$PROD_TOTAL_MACHINES" \
+            --naming-scheme "$naming_scheme" \
+            --catalog-name-prefix "$catalog_name_prefix"
+
+      # Captured BEFORE cutover overwrites its machine_count to 0 - this is
+      # what the drain step below targets.
+      - name: Find prod's outgoing catalog, if any
+        id: outgoing
+        run: python3 scripts/rotate_image_versions.py "$ROTATION_FILE" current-live --env prod --exclude "${{ steps.source.outputs.label }}"
+
+      - name: Cut prod over to the promoted label
+        run: |
+          python3 scripts/rotate_image_versions.py "$ROTATION_FILE" cutover \
+            --env prod \
+            --new-label "${{ steps.source.outputs.label }}" \
+            --machine-count "$PROD_TOTAL_MACHINES" \
+            ${{ steps.outgoing.outputs.label != '' && format('--old-label {0}', steps.outgoing.outputs.label) || '' }}
+
+      - name: Commit the rotation state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$ROTATION_FILE"
+          if git diff --staged --quiet; then
+            echo "No changes to $ROTATION_FILE, skipping commit"
+          else
+            git commit -m "citrix-image-rotation: promote ${{ steps.source.outputs.label }} to prod"
+            git pull --rebase
+            git push
+          fi
+
+      - name: terraform apply
+        working-directory: ${{ env.TF_WORKDIR }}
+        env:
+          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+        run: |
+          terraform init
+          terraform apply -auto-approve
+
+      # Retires the outgoing Prod catalog from serving traffic without
+      # deleting anything - actual decommission is still the separate,
+      # manual workflow_dispatch action above, run whenever the operator is
+      # ready. Uses Citrix's DaaS REST API directly (not Terraform - the
+      # citrix/citrix provider has no per-machine maintenance-mode support,
+      # see scripts/citrix_daas_maintenance.py's module docstring for why).
+      # Bounded wait: whatever drains within the timeout gets powered off;
+      # anything still occupied is left running, untouched, for manual
+      # follow-up - this never forces a user's session closed.
+      - name: Drain and power off the outgoing prod catalog's machines
+        id: drain
+        if: steps.outgoing.outputs.label != ''
+        env:
+          CITRIX_MAINTENANCE_CLIENT_ID: ${{ secrets.CITRIX_MAINTENANCE_CLIENT_ID }}
+          CITRIX_MAINTENANCE_CLIENT_SECRET: ${{ secrets.CITRIX_MAINTENANCE_CLIENT_SECRET }}
+        run: |
+          customer_id=$(python3 -c "
+          import json
+          print(json.load(open('${{ env.TF_WORKDIR }}/ci.auto.tfvars.json'))['citrix_customer_id'])
+          ")
+          python3 scripts/citrix_daas_maintenance.py drain \
+            --customer-id "$customer_id" \
+            --catalog-name "${{ steps.outgoing.outputs.catalog_name }}" \
+            --timeout-minutes 45 \
+            --poll-interval-seconds 60
+
+      - name: Warn about machines that didn't drain in time
+        if: steps.drain.outputs.still_occupied_count > 0
+        run: |
+          echo "::warning::${{ steps.drain.outputs.still_occupied_count }} machine(s) in ${{ steps.outgoing.outputs.catalog_name }} still had active sessions after the drain timeout: ${{ steps.drain.outputs.still_occupied_machines }} - left running, needs manual follow-up."
+
+      - name: Check outstanding image labels
+        run: python3 scripts/rotate_image_versions.py "$ROTATION_FILE" check-outstanding --threshold "$OUTSTANDING_IMAGE_LABEL_THRESHOLD"
