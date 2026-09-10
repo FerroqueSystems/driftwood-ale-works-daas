@@ -142,16 +142,72 @@ Configure these under repo Settings before pushing to `feature/**`/
 `citrix-image-rotation.yml` manually. `terraform.yml` and `packer.yml`'s
 existing `fmt`/`validate`-only jobs need none of these.
 
-**Secrets:**
+Every real config value is its own named GitHub secret or variable -
+`.github/actions/write-citrix-tfvars` and `.github/actions/write-packer-vars`
+(two local composite actions) assemble them into the gitignored
+`ci.auto.tfvars.json`/`ci.auto.pkrvars.json` files each job needs at
+runtime. Almost everything below is **repo-level** (Settings > Secrets and
+variables > Actions), since one Lab subscription/Citrix Cloud tenant backs
+every environment - only the Prod drain credentials are scoped to a single
+GitHub Environment (see the last table).
+
+**Repo-level variables** (Settings > Secrets and variables > Actions >
+Variables tab - not sensitive, but still only relevant to CI):
+
+| Variable | Purpose |
+|---|---|
+| `LOCATION` | Azure region for all resources |
+| `RESOURCE_GROUP_NAME` | Resource group for the whole environment |
+| `TAGS_JSON` | JSON map of tags applied to Azure resources |
+| `ENABLE_SCHEDULED_SHUTDOWN` / `SCHEDULED_SHUTDOWN_TIME` / `SCHEDULED_SHUTDOWN_TIMEZONE` | Native Azure auto-shutdown schedule applied to every Terraform-managed VM (see "Status / next steps" above) |
+| `VNET_NAME` / `VNET_ADDRESS_SPACE_JSON` / `VDA_SUBNET_ADDRESS_PREFIXES_JSON` | Networking (JSON-encoded lists for the address-space/prefix values) |
+| `HOSTING_CONNECTION_APP_NAME` | Display name for the Azure AD app registration behind Citrix's hosting connection |
+| `CITRIX_ENVIRONMENT` / `CITRIX_RESOURCE_LOCATION_NAME` / `CITRIX_ZONE_DESCRIPTION` / `CITRIX_HYPERVISOR_NAME` / `CITRIX_RESOURCE_POOL_NAME` | Citrix Cloud environment + DaaS object naming |
+| `CITRIX_ALLOCATION_TYPE` / `CITRIX_VDA_SERVICE_OFFERING` / `CITRIX_VDA_STORAGE_TYPE` | MCS provisioning settings for VDA machines |
+| `DELIVERY_GROUP_DEV_CONFIG_JSON` / `DELIVERY_GROUP_TEST_CONFIG_JSON` / `DELIVERY_GROUP_PROD_CONFIG_JSON` | One environment's slice of `delivery_groups` each (name, published desktop, access allow-list, autoscale `power_time_schemes`, catalog-naming conventions), as a JSON object matching `terraform.tfvars.example`'s `delivery_groups.dev`/`.test`/`.prod` shape. **All three are read on every job regardless of which single environment it's cutting over** - `write-citrix-tfvars` always reassembles the complete `{dev, test, prod}` map, because Terraform's `for_each` over `delivery_groups` would destroy whichever environments are missing from a partial map |
+| `ACTIVE_DIRECTORY_DOMAIN_FQDN` / `ACTIVE_DIRECTORY_DOMAIN_NETBIOS_NAME` | New AD DS forest/domain identity |
+| `ACTIVE_DIRECTORY_SERVICE_ACCOUNT_NAME` / `ACTIVE_DIRECTORY_BASE_OU_NAME` / `ACTIVE_DIRECTORY_VDA_OU_NAME` / `ACTIVE_DIRECTORY_CONNECTOR_OU_NAME` | AD object naming (service account, OU structure) |
+| `ACTIVE_DIRECTORY_DEV_DESKTOP_GROUP_NAME` / `ACTIVE_DIRECTORY_TEST_DESKTOP_GROUP_NAME` / `ACTIVE_DIRECTORY_PROD_DESKTOP_GROUP_NAME` | AD security groups referenced by each delivery group's access allow-list |
+| `DOMAIN_CONTROLLER_ADMIN_USERNAME` / `DOMAIN_CONTROLLER_SCRIPTS_STORAGE_ACCOUNT_NAME` | Domain controller VM admin username + their bootstrap-script storage account name |
+| `CLOUD_CONNECTOR_ADMIN_USERNAME` / `CLOUD_CONNECTOR_SCRIPTS_STORAGE_ACCOUNT_NAME` | Cloud Connector VM admin username + their bootstrap-script storage account name |
+| `GITHUB_RUNNER_NAME` / `GITHUB_RUNNER_VM_SIZE` / `GITHUB_RUNNER_ADMIN_USERNAME` | Self-hosted runner VM identity/sizing |
+| `ENABLE_RUNNER_TEMPORARY_SSH_ACCESS` | Whether the one-time public-IP+NSG SSH path for runner registration is open (leave `false` outside that registration step) |
+| `GALLERY_NAME` / `IMAGE_DEFINITION_NAME` / `IMAGE_SKU` | Shared Image Gallery / VDA image definition naming |
+| `ARTIFACT_STORAGE_ACCOUNT_NAME` / `ARTIFACT_STORAGE_CONTAINER_NAME` | Storage account/container holding Packer build artifacts (VDA installer, Citrix Optimizer zip) |
+| `DEV_TOTAL_MACHINES` / `TEST_TOTAL_MACHINES` / `PROD_TOTAL_MACHINES` | Machine-catalog size for the automatic push-triggered jobs (default 3/5/20 if unset) |
+| `OUTSTANDING_IMAGE_LABEL_THRESHOLD` | Outstanding-image-count that triggers a (non-blocking) warning (default 5 if unset) |
+| `AZURE_IMGPUBLISHER` / `AZURE_IMGOFFER` / `AZURE_IMGSKU` / `AZURE_IMGVERSION` | Base Azure Marketplace image Packer builds from |
+| `INSTALL_CHOCOLATEY_PACKAGES` / `CHOCOLATEY_PACKAGES_JSON` | Optional Chocolatey package install during the image build |
+| `INSTALL_M365_APPS` / `M365_APPS_ODT_URL` | Optional Microsoft 365 Apps install |
+| `INSTALL_CITRIX_VDA` / `CITRIX_VDA_INSTALLER_ARGS` | VDA install toggle + silent-install args (the installer URL itself is a secret, below) |
+| `INSTALL_CLOUDPAGING_PLAYER` / `CLOUDPAGING_PLAYER_INSTALLER_ARGS` | Optional Cloudpaging Player install toggle + silent-install args |
+| `RUN_CITRIX_OPTIMIZER` / `CITRIX_OPTIMIZER_TEMPLATE_NAME` | Optional Citrix Optimizer pass + template name |
+| `PREPARE_FOR_CITRIX_MCS` | Whether Packer runs MCS image-prep steps (sysprep, etc.) |
+| `MANAGED_IMAGE_TAGS_JSON` | JSON map of tags applied to the published gallery image version |
+
+**Repo-level secrets** (Settings > Secrets and variables > Actions >
+Secrets tab):
+
+| Secret | Purpose |
+|---|---|
+| `ARM_CLIENT_ID` / `ARM_TENANT_ID` / `ARM_SUBSCRIPTION_ID` | OIDC federated login (`azure/login`) for the `azurerm`/`azuread` providers and the Terraform state backend; also fed straight through as the `azure_subscription_id`/`azure_tenant_id` Terraform variables. For this demo these must point at the **Lab** Azure subscription/tenant, not production - the whole environment (including the self-hosted runner VM) is provisioned there |
+| `CITRIX_CUSTOMER_ID` / `CITRIX_CLIENT_ID` / `CITRIX_CLIENT_SECRET` | Citrix Cloud API credentials for the Terraform provider itself (`providers.tf` reads `CITRIX_CLIENT_SECRET` directly as an env var) |
+| `ACTIVE_DIRECTORY_SAFE_MODE_PASSWORD` / `ACTIVE_DIRECTORY_SERVICE_ACCOUNT_PASSWORD` | DSRM safe-mode password + the MCS/Cloud-Connector-domain-join service account's password |
+| `DOMAIN_CONTROLLER_ADMIN_PASSWORD` | Local admin password for the domain controller VMs |
+| `CLOUD_CONNECTOR_ADMIN_PASSWORD` | Local admin password for the Cloud Connector VMs |
+| `CLOUD_CONNECTOR_CLIENT_ID` / `CLOUD_CONNECTOR_CLIENT_SECRET` | A **second**, dedicated Citrix Cloud API client for Cloud Connector registration - deliberately separate from `CITRIX_CLIENT_ID`/`_SECRET` |
+| `CLOUD_CONNECTOR_INSTALLER_URL` | Read-only SAS URL to the Cloud Connector installer (`CWCConnector.exe`) in artifact storage |
+| `GITHUB_RUNNER_ADMIN_SSH_PUBLIC_KEY` | SSH public key for the self-hosted runner VM's admin user (not secret in principle, kept as a Secret to avoid it sitting in a Variable for no benefit) |
+| `ADMIN_SOURCE_IP_CIDR` | CIDR allowed to SSH into the runner VM while `ENABLE_RUNNER_TEMPORARY_SSH_ACCESS` is true (only needed during registration) |
+| `VDA_LOCAL_ADMIN_USERNAME` / `VDA_LOCAL_ADMIN_PASSWORD` | Local admin credentials Packer sets on the VDA master image during the build |
+| `CITRIX_VDA_INSTALLER_URL` / `CLOUDPAGING_PLAYER_INSTALLER_URL` / `CITRIX_OPTIMIZER_ZIP_URL` | Read-only SAS URLs to the respective installers/zip in artifact storage |
+
+**Environment-scoped secrets** (Settings > Environments >
+`citrix-cutover-approval-prod` > environment secrets - not repo-level):
 
 | Secret | Used by | Purpose |
 |---|---|---|
-| `ARM_CLIENT_ID` / `ARM_TENANT_ID` / `ARM_SUBSCRIPTION_ID` | `citrix-image-rotation.yml` | OIDC federated login (`azure/login`) for the `azurerm`/`azuread` providers and the Terraform state backend. For this demo, `ARM_SUBSCRIPTION_ID` (and the federated credential on the Entra ID app behind `ARM_CLIENT_ID`) must point at the **Lab** Azure subscription, not a production one - the whole environment (including the self-hosted runner VM) is provisioned there. |
-| `CITRIX_CLIENT_SECRET` | `citrix-image-rotation.yml` | Citrix Cloud API secret for the Terraform provider itself, read directly as an env var by `providers.tf` |
-| `CITRIX_MAINTENANCE_CLIENT_ID` / `CITRIX_MAINTENANCE_CLIENT_SECRET` | `citrix-image-rotation.yml` (`promote-to-prod-and-drain` job) | A **third**, dedicated Citrix Cloud API client for `scripts/citrix_daas_maintenance.py`'s maintenance-mode/drain/power-off calls - deliberately separate from both `CITRIX_CLIENT_SECRET` (the Terraform provider's) and the Cloud Connector registration client, since this one can drain and power off live production VDAs |
-| `TERRAFORM_TFVARS_JSON` | `citrix-image-rotation.yml` | Full JSON of everything in `terraform.tfvars.example` (this file is gitignored/local-only, so CI needs its own copy) - now includes the `delivery_groups` map, AD domain/service-account/safe-mode passwords, domain controller/Cloud Connector local admin passwords, the dedicated Cloud Connector API client ID/secret, and the Cloud Connector installer's SAS URL |
-| `PACKER_BUILD_VARS_JSON` | `citrix-image-rotation.yml` | Full JSON of everything in `packer/images/win11-azure.pkrvars.hcl.example` (same reasoning) |
-| `VDA_LOCAL_ADMIN_USERNAME` / `VDA_LOCAL_ADMIN_PASSWORD` | `citrix-image-rotation.yml` (`build` job) | Local admin credentials Packer sets on the VDA master image during the build |
+| `CITRIX_MAINTENANCE_CLIENT_ID` / `CITRIX_MAINTENANCE_CLIENT_SECRET` | `citrix-image-rotation.yml` (`promote-to-prod-and-drain` job) | A **third**, dedicated Citrix Cloud API client for `scripts/citrix_daas_maintenance.py`'s maintenance-mode/drain/power-off calls - deliberately separate from both `CITRIX_CLIENT_SECRET` (the Terraform provider's) and the Cloud Connector registration client, since this one can drain and power off live production VDAs. Scoped to just this one environment (rather than repo-level, like everything else above) since it's a script argument, not part of any Terraform map, and only this one job ever needs it |
 
 **Also required (not a GitHub secret/variable):** a required-reviewer rule on
 each of the following environments (repo Settings > Environments) - **six**
@@ -165,3 +221,11 @@ lighter-gated or ungated while Prod requires a named reviewer:
 automatic `promote-to-prod-and-drain` job, since either can touch Prod - a
 push to `main` starts that job, but it still pauses for the environment's
 required reviewer before actually running.)
+
+The `build` job (manual image builds) runs under a seventh environment,
+`techops-monthly-daas` - gate it however TechOps wants monthly golden-image
+builds reviewed. None of these seven environments exist yet in this repo
+(confirmed via `gh api repos/{owner}/{repo}/environments`) - create each one
+(Settings > Environments > New environment, or `gh api .../environments/<name> -X PUT`)
+before setting `CITRIX_MAINTENANCE_CLIENT_ID`/`_SECRET` on
+`citrix-cutover-approval-prod` or adding required-reviewer rules.

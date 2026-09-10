@@ -1,0 +1,186 @@
+name: Write Packer build vars
+description: >
+  Assembles packer/images/ci.auto.pkrvars.json from individual GitHub
+  secrets/variables (see the top-level README's secrets/variables table),
+  replacing the single PACKER_BUILD_VARS_JSON blob secret.
+  subscription_id/location/build_resource_group_name/
+  gallery_resource_group_name/gallery_name/gallery_image_name are
+  deliberately NOT separate inputs here - they're derived from the same
+  values already used for Terraform (passed in from the calling job) so
+  Packer can never target a different resource group/gallery than the one
+  Terraform actually created. gallery_image_version isn't written here
+  either - the calling workflow already passes that on the `packer build`
+  command line per-build, not via this var file.
+
+inputs:
+  working_directory:
+    default: packer/images
+  subscription_id:
+    required: true
+  location:
+    required: true
+  resource_group_name:
+    required: true
+  gallery_name:
+    required: true
+  image_definition_name:
+    required: true
+  azure_imgpublisher:
+    default: ""
+  azure_imgoffer:
+    default: ""
+  azure_imgsku:
+    default: ""
+  azure_imgversion:
+    default: ""
+  install_chocolatey_packages:
+    default: ""
+  chocolatey_packages_json:
+    default: ""
+  install_m365_apps:
+    default: ""
+  m365_apps_odt_url:
+    default: ""
+  install_citrix_vda:
+    default: ""
+  citrix_vda_installer_url:
+    default: ""
+  citrix_vda_installer_args:
+    default: ""
+  install_cloudpaging_player:
+    default: ""
+  cloudpaging_player_installer_url:
+    default: ""
+  cloudpaging_player_installer_args:
+    default: ""
+  run_citrix_optimizer:
+    default: ""
+  citrix_optimizer_zip_url:
+    default: ""
+  citrix_optimizer_template_name:
+    default: ""
+  prepare_for_citrix_mcs:
+    default: ""
+  local_admin_username:
+    default: ""
+  local_admin_password:
+    default: ""
+  managed_image_tags_json:
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      # Same reasoning as write-citrix-tfvars: every value flows through
+      # env: rather than being spliced directly into the script body.
+      env:
+        SUBSCRIPTION_ID: ${{ inputs.subscription_id }}
+        LOCATION: ${{ inputs.location }}
+        RESOURCE_GROUP_NAME: ${{ inputs.resource_group_name }}
+        GALLERY_NAME: ${{ inputs.gallery_name }}
+        IMAGE_DEFINITION_NAME: ${{ inputs.image_definition_name }}
+        AZURE_IMGPUBLISHER: ${{ inputs.azure_imgpublisher }}
+        AZURE_IMGOFFER: ${{ inputs.azure_imgoffer }}
+        AZURE_IMGSKU: ${{ inputs.azure_imgsku }}
+        AZURE_IMGVERSION: ${{ inputs.azure_imgversion }}
+        INSTALL_CHOCOLATEY_PACKAGES: ${{ inputs.install_chocolatey_packages }}
+        CHOCOLATEY_PACKAGES_JSON: ${{ inputs.chocolatey_packages_json }}
+        INSTALL_M365_APPS: ${{ inputs.install_m365_apps }}
+        M365_APPS_ODT_URL: ${{ inputs.m365_apps_odt_url }}
+        INSTALL_CITRIX_VDA: ${{ inputs.install_citrix_vda }}
+        CITRIX_VDA_INSTALLER_URL: ${{ inputs.citrix_vda_installer_url }}
+        CITRIX_VDA_INSTALLER_ARGS: ${{ inputs.citrix_vda_installer_args }}
+        INSTALL_CLOUDPAGING_PLAYER: ${{ inputs.install_cloudpaging_player }}
+        CLOUDPAGING_PLAYER_INSTALLER_URL: ${{ inputs.cloudpaging_player_installer_url }}
+        CLOUDPAGING_PLAYER_INSTALLER_ARGS: ${{ inputs.cloudpaging_player_installer_args }}
+        RUN_CITRIX_OPTIMIZER: ${{ inputs.run_citrix_optimizer }}
+        CITRIX_OPTIMIZER_ZIP_URL: ${{ inputs.citrix_optimizer_zip_url }}
+        CITRIX_OPTIMIZER_TEMPLATE_NAME: ${{ inputs.citrix_optimizer_template_name }}
+        PREPARE_FOR_CITRIX_MCS: ${{ inputs.prepare_for_citrix_mcs }}
+        LOCAL_ADMIN_USERNAME: ${{ inputs.local_admin_username }}
+        LOCAL_ADMIN_PASSWORD: ${{ inputs.local_admin_password }}
+        MANAGED_IMAGE_TAGS_JSON: ${{ inputs.managed_image_tags_json }}
+      run: |
+        set -euo pipefail
+
+        : "${AZURE_IMGPUBLISHER:=MicrosoftWindowsDesktop}"
+        : "${AZURE_IMGOFFER:=windows-11}"
+        : "${AZURE_IMGSKU:=win11-25h2-pro}"
+        : "${AZURE_IMGVERSION:=latest}"
+        : "${INSTALL_CHOCOLATEY_PACKAGES:=false}"
+        : "${CHOCOLATEY_PACKAGES_JSON:=[]}"
+        : "${INSTALL_M365_APPS:=false}"
+        : "${M365_APPS_ODT_URL:=}"
+        : "${INSTALL_CITRIX_VDA:=false}"
+        : "${CITRIX_VDA_INSTALLER_URL:=}"
+        : "${CITRIX_VDA_INSTALLER_ARGS:=}"
+        : "${INSTALL_CLOUDPAGING_PLAYER:=false}"
+        : "${CLOUDPAGING_PLAYER_INSTALLER_URL:=}"
+        : "${CLOUDPAGING_PLAYER_INSTALLER_ARGS:=}"
+        : "${RUN_CITRIX_OPTIMIZER:=false}"
+        : "${CITRIX_OPTIMIZER_ZIP_URL:=}"
+        : "${CITRIX_OPTIMIZER_TEMPLATE_NAME:=Citrix_Windows_11_2009.xml}"
+        : "${PREPARE_FOR_CITRIX_MCS:=true}"
+        : "${LOCAL_ADMIN_USERNAME:=}"
+        : "${LOCAL_ADMIN_PASSWORD:=}"
+        : "${MANAGED_IMAGE_TAGS_JSON:={\"Environment\":\"demo\",\"Role\":\"golden-image\",\"OS\":\"windows-11\"}}"
+
+        jq -n \
+          --arg subscription_id "$SUBSCRIPTION_ID" \
+          --arg location "$LOCATION" \
+          --arg build_resource_group_name "$RESOURCE_GROUP_NAME" \
+          --arg gallery_resource_group_name "$RESOURCE_GROUP_NAME" \
+          --arg gallery_name "$GALLERY_NAME" \
+          --arg gallery_image_name "$IMAGE_DEFINITION_NAME" \
+          --arg azure_imgpublisher "$AZURE_IMGPUBLISHER" \
+          --arg azure_imgoffer "$AZURE_IMGOFFER" \
+          --arg azure_imgsku "$AZURE_IMGSKU" \
+          --arg azure_imgversion "$AZURE_IMGVERSION" \
+          --argjson install_chocolatey_packages "$INSTALL_CHOCOLATEY_PACKAGES" \
+          --argjson chocolatey_packages "$CHOCOLATEY_PACKAGES_JSON" \
+          --argjson install_m365_apps "$INSTALL_M365_APPS" \
+          --arg m365_apps_odt_url "$M365_APPS_ODT_URL" \
+          --argjson install_citrix_vda "$INSTALL_CITRIX_VDA" \
+          --arg citrix_vda_installer_url "$CITRIX_VDA_INSTALLER_URL" \
+          --arg citrix_vda_installer_args "$CITRIX_VDA_INSTALLER_ARGS" \
+          --argjson install_cloudpaging_player "$INSTALL_CLOUDPAGING_PLAYER" \
+          --arg cloudpaging_player_installer_url "$CLOUDPAGING_PLAYER_INSTALLER_URL" \
+          --arg cloudpaging_player_installer_args "$CLOUDPAGING_PLAYER_INSTALLER_ARGS" \
+          --argjson run_citrix_optimizer "$RUN_CITRIX_OPTIMIZER" \
+          --arg citrix_optimizer_zip_url "$CITRIX_OPTIMIZER_ZIP_URL" \
+          --arg citrix_optimizer_template_name "$CITRIX_OPTIMIZER_TEMPLATE_NAME" \
+          --argjson prepare_for_citrix_mcs "$PREPARE_FOR_CITRIX_MCS" \
+          --arg local_admin_username "$LOCAL_ADMIN_USERNAME" \
+          --arg local_admin_password "$LOCAL_ADMIN_PASSWORD" \
+          --argjson managed_image_tags "$MANAGED_IMAGE_TAGS_JSON" \
+          '{
+            subscription_id: $subscription_id,
+            location: $location,
+            build_resource_group_name: $build_resource_group_name,
+            gallery_resource_group_name: $gallery_resource_group_name,
+            gallery_name: $gallery_name,
+            gallery_image_name: $gallery_image_name,
+            azure_imgpublisher: $azure_imgpublisher,
+            azure_imgoffer: $azure_imgoffer,
+            azure_imgsku: $azure_imgsku,
+            azure_imgversion: $azure_imgversion,
+            install_chocolatey_packages: $install_chocolatey_packages,
+            chocolatey_packages: $chocolatey_packages,
+            install_m365_apps: $install_m365_apps,
+            m365_apps_odt_url: $m365_apps_odt_url,
+            install_citrix_vda: $install_citrix_vda,
+            citrix_vda_installer_url: $citrix_vda_installer_url,
+            citrix_vda_installer_args: $citrix_vda_installer_args,
+            install_cloudpaging_player: $install_cloudpaging_player,
+            cloudpaging_player_installer_url: $cloudpaging_player_installer_url,
+            cloudpaging_player_installer_args: $cloudpaging_player_installer_args,
+            run_citrix_optimizer: $run_citrix_optimizer,
+            citrix_optimizer_zip_url: $citrix_optimizer_zip_url,
+            citrix_optimizer_template_name: $citrix_optimizer_template_name,
+            prepare_for_citrix_mcs: $prepare_for_citrix_mcs,
+            local_admin_username: $local_admin_username,
+            local_admin_password: $local_admin_password,
+            managed_image_tags: $managed_image_tags
+          }' > ci.auto.pkrvars.json

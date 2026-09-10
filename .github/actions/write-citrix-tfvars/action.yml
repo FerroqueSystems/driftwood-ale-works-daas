@@ -1,0 +1,358 @@
+name: Write Citrix Terraform vars
+description: >
+  Assembles environments/citrix-azure/ci.auto.tfvars.json from individual
+  GitHub secrets/variables (see the top-level README's secrets/variables
+  table), replacing the single TERRAFORM_TFVARS_JSON blob secret. Always
+  writes the complete delivery_groups map (dev+test+prod) regardless of
+  which single GitHub Environment the calling job declares - every
+  citrix_delivery_group/citrix_machine_catalog for_each loop needs the full
+  map on every apply, or anything missing from it gets destroyed, and a job
+  scoped to one GitHub Environment can't read another environment's scoped
+  variables anyway (that's why DELIVERY_GROUP_{DEV,TEST,PROD}_CONFIG_JSON
+  are repo-level, not environment-scoped, even though they're logically
+  "per environment").
+
+inputs:
+  working_directory:
+    default: environments/citrix-azure
+  location:
+    required: true
+  resource_group_name:
+    required: true
+  tags_json:
+    default: ""
+  enable_scheduled_shutdown:
+    default: ""
+  scheduled_shutdown_time:
+    default: ""
+  scheduled_shutdown_timezone:
+    default: ""
+  vnet_name:
+    required: true
+  vnet_address_space_json:
+    required: true
+  vda_subnet_address_prefixes_json:
+    required: true
+  hosting_connection_app_name:
+    default: ""
+  azure_subscription_id:
+    required: true
+  azure_tenant_id:
+    required: true
+  citrix_customer_id:
+    required: true
+  citrix_client_id:
+    required: true
+  citrix_environment:
+    default: ""
+  citrix_resource_location_name:
+    required: true
+  citrix_zone_description:
+    default: ""
+  citrix_hypervisor_name:
+    required: true
+  citrix_resource_pool_name:
+    required: true
+  delivery_group_dev_config_json:
+    required: true
+  delivery_group_test_config_json:
+    required: true
+  delivery_group_prod_config_json:
+    required: true
+  citrix_allocation_type:
+    default: ""
+  citrix_vda_service_offering:
+    required: true
+  citrix_vda_storage_type:
+    default: ""
+  active_directory_domain_fqdn:
+    default: ""
+  active_directory_domain_netbios_name:
+    default: ""
+  active_directory_safe_mode_password:
+    required: true
+  active_directory_service_account_name:
+    default: ""
+  active_directory_service_account_password:
+    required: true
+  active_directory_base_ou_name:
+    default: ""
+  active_directory_vda_ou_name:
+    default: ""
+  active_directory_connector_ou_name:
+    default: ""
+  active_directory_dev_desktop_group_name:
+    default: ""
+  active_directory_test_desktop_group_name:
+    default: ""
+  active_directory_prod_desktop_group_name:
+    default: ""
+  domain_controller_admin_username:
+    default: ""
+  domain_controller_admin_password:
+    required: true
+  domain_controller_scripts_storage_account_name:
+    default: ""
+  cloud_connector_admin_username:
+    default: ""
+  cloud_connector_admin_password:
+    required: true
+  cloud_connector_client_id:
+    required: true
+  cloud_connector_client_secret:
+    required: true
+  cloud_connector_installer_url:
+    required: true
+  cloud_connector_scripts_storage_account_name:
+    default: ""
+  github_runner_name:
+    default: ""
+  github_runner_vm_size:
+    default: ""
+  github_runner_admin_username:
+    default: ""
+  github_runner_admin_ssh_public_key:
+    required: true
+  enable_runner_temporary_ssh_access:
+    default: ""
+  admin_source_ip_cidr:
+    default: ""
+  gallery_name:
+    required: true
+  image_definition_name:
+    required: true
+  image_sku:
+    required: true
+  artifact_storage_account_name:
+    required: true
+  artifact_storage_container_name:
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      # Every value flows through env: (never spliced directly into the
+      # script body via ${{ }}) so a secret containing shell metacharacters
+      # can't be reinterpreted as script text - GitHub's documented safe
+      # pattern for using untrusted/sensitive input in a run: step.
+      env:
+        LOCATION: ${{ inputs.location }}
+        RESOURCE_GROUP_NAME: ${{ inputs.resource_group_name }}
+        TAGS_JSON: ${{ inputs.tags_json }}
+        ENABLE_SCHEDULED_SHUTDOWN: ${{ inputs.enable_scheduled_shutdown }}
+        SCHEDULED_SHUTDOWN_TIME: ${{ inputs.scheduled_shutdown_time }}
+        SCHEDULED_SHUTDOWN_TIMEZONE: ${{ inputs.scheduled_shutdown_timezone }}
+        VNET_NAME: ${{ inputs.vnet_name }}
+        VNET_ADDRESS_SPACE_JSON: ${{ inputs.vnet_address_space_json }}
+        VDA_SUBNET_ADDRESS_PREFIXES_JSON: ${{ inputs.vda_subnet_address_prefixes_json }}
+        HOSTING_CONNECTION_APP_NAME: ${{ inputs.hosting_connection_app_name }}
+        AZURE_SUBSCRIPTION_ID: ${{ inputs.azure_subscription_id }}
+        AZURE_TENANT_ID: ${{ inputs.azure_tenant_id }}
+        CITRIX_CUSTOMER_ID: ${{ inputs.citrix_customer_id }}
+        CITRIX_CLIENT_ID: ${{ inputs.citrix_client_id }}
+        CITRIX_ENVIRONMENT: ${{ inputs.citrix_environment }}
+        CITRIX_RESOURCE_LOCATION_NAME: ${{ inputs.citrix_resource_location_name }}
+        CITRIX_ZONE_DESCRIPTION: ${{ inputs.citrix_zone_description }}
+        CITRIX_HYPERVISOR_NAME: ${{ inputs.citrix_hypervisor_name }}
+        CITRIX_RESOURCE_POOL_NAME: ${{ inputs.citrix_resource_pool_name }}
+        DELIVERY_GROUP_DEV_CONFIG_JSON: ${{ inputs.delivery_group_dev_config_json }}
+        DELIVERY_GROUP_TEST_CONFIG_JSON: ${{ inputs.delivery_group_test_config_json }}
+        DELIVERY_GROUP_PROD_CONFIG_JSON: ${{ inputs.delivery_group_prod_config_json }}
+        CITRIX_ALLOCATION_TYPE: ${{ inputs.citrix_allocation_type }}
+        CITRIX_VDA_SERVICE_OFFERING: ${{ inputs.citrix_vda_service_offering }}
+        CITRIX_VDA_STORAGE_TYPE: ${{ inputs.citrix_vda_storage_type }}
+        ACTIVE_DIRECTORY_DOMAIN_FQDN: ${{ inputs.active_directory_domain_fqdn }}
+        ACTIVE_DIRECTORY_DOMAIN_NETBIOS_NAME: ${{ inputs.active_directory_domain_netbios_name }}
+        ACTIVE_DIRECTORY_SAFE_MODE_PASSWORD: ${{ inputs.active_directory_safe_mode_password }}
+        ACTIVE_DIRECTORY_SERVICE_ACCOUNT_NAME: ${{ inputs.active_directory_service_account_name }}
+        ACTIVE_DIRECTORY_SERVICE_ACCOUNT_PASSWORD: ${{ inputs.active_directory_service_account_password }}
+        ACTIVE_DIRECTORY_BASE_OU_NAME: ${{ inputs.active_directory_base_ou_name }}
+        ACTIVE_DIRECTORY_VDA_OU_NAME: ${{ inputs.active_directory_vda_ou_name }}
+        ACTIVE_DIRECTORY_CONNECTOR_OU_NAME: ${{ inputs.active_directory_connector_ou_name }}
+        ACTIVE_DIRECTORY_DEV_DESKTOP_GROUP_NAME: ${{ inputs.active_directory_dev_desktop_group_name }}
+        ACTIVE_DIRECTORY_TEST_DESKTOP_GROUP_NAME: ${{ inputs.active_directory_test_desktop_group_name }}
+        ACTIVE_DIRECTORY_PROD_DESKTOP_GROUP_NAME: ${{ inputs.active_directory_prod_desktop_group_name }}
+        DOMAIN_CONTROLLER_ADMIN_USERNAME: ${{ inputs.domain_controller_admin_username }}
+        DOMAIN_CONTROLLER_ADMIN_PASSWORD: ${{ inputs.domain_controller_admin_password }}
+        DOMAIN_CONTROLLER_SCRIPTS_STORAGE_ACCOUNT_NAME: ${{ inputs.domain_controller_scripts_storage_account_name }}
+        CLOUD_CONNECTOR_ADMIN_USERNAME: ${{ inputs.cloud_connector_admin_username }}
+        CLOUD_CONNECTOR_ADMIN_PASSWORD: ${{ inputs.cloud_connector_admin_password }}
+        CLOUD_CONNECTOR_CLIENT_ID: ${{ inputs.cloud_connector_client_id }}
+        CLOUD_CONNECTOR_CLIENT_SECRET: ${{ inputs.cloud_connector_client_secret }}
+        CLOUD_CONNECTOR_INSTALLER_URL: ${{ inputs.cloud_connector_installer_url }}
+        CLOUD_CONNECTOR_SCRIPTS_STORAGE_ACCOUNT_NAME: ${{ inputs.cloud_connector_scripts_storage_account_name }}
+        GITHUB_RUNNER_NAME: ${{ inputs.github_runner_name }}
+        GITHUB_RUNNER_VM_SIZE: ${{ inputs.github_runner_vm_size }}
+        GITHUB_RUNNER_ADMIN_USERNAME: ${{ inputs.github_runner_admin_username }}
+        GITHUB_RUNNER_ADMIN_SSH_PUBLIC_KEY: ${{ inputs.github_runner_admin_ssh_public_key }}
+        ENABLE_RUNNER_TEMPORARY_SSH_ACCESS: ${{ inputs.enable_runner_temporary_ssh_access }}
+        ADMIN_SOURCE_IP_CIDR: ${{ inputs.admin_source_ip_cidr }}
+        GALLERY_NAME: ${{ inputs.gallery_name }}
+        IMAGE_DEFINITION_NAME: ${{ inputs.image_definition_name }}
+        IMAGE_SKU: ${{ inputs.image_sku }}
+        ARTIFACT_STORAGE_ACCOUNT_NAME: ${{ inputs.artifact_storage_account_name }}
+        ARTIFACT_STORAGE_CONTAINER_NAME: ${{ inputs.artifact_storage_container_name }}
+      run: |
+        set -euo pipefail
+
+        # Defaults for everything optional, matching environments/citrix-azure/variables.tf's
+        # own defaults - applied here (not via this action's own `inputs.*.default`)
+        # since the workflow always passes a `with:` value explicitly, even
+        # when the underlying secret/variable doesn't exist yet (which
+        # resolves to an empty string, not "omitted") - `:=` fills in the
+        # default whenever the value is unset OR empty.
+        : "${TAGS_JSON:={}}"
+        : "${ENABLE_SCHEDULED_SHUTDOWN:=true}"
+        : "${SCHEDULED_SHUTDOWN_TIME:=1900}"
+        : "${SCHEDULED_SHUTDOWN_TIMEZONE:=Eastern Standard Time}"
+        : "${HOSTING_CONNECTION_APP_NAME:=driftwood-citrix-daas-hosting-connection}"
+        : "${CITRIX_ENVIRONMENT:=Production}"
+        : "${CITRIX_ZONE_DESCRIPTION:=}"
+        : "${CITRIX_ALLOCATION_TYPE:=Random}"
+        : "${CITRIX_VDA_STORAGE_TYPE:=StandardSSD_LRS}"
+        : "${ACTIVE_DIRECTORY_DOMAIN_FQDN:=driftwood.local}"
+        : "${ACTIVE_DIRECTORY_DOMAIN_NETBIOS_NAME:=DRIFTWOOD}"
+        : "${ACTIVE_DIRECTORY_SERVICE_ACCOUNT_NAME:=svc-mcs}"
+        : "${ACTIVE_DIRECTORY_BASE_OU_NAME:=Driftwood}"
+        : "${ACTIVE_DIRECTORY_VDA_OU_NAME:=VDAs}"
+        : "${ACTIVE_DIRECTORY_CONNECTOR_OU_NAME:=Cloud Connectors}"
+        : "${ACTIVE_DIRECTORY_DEV_DESKTOP_GROUP_NAME:=Driftwood Dev Desktop Users}"
+        : "${ACTIVE_DIRECTORY_TEST_DESKTOP_GROUP_NAME:=Driftwood QA Desktop Users}"
+        : "${ACTIVE_DIRECTORY_PROD_DESKTOP_GROUP_NAME:=Driftwood Prod Desktop Users}"
+        : "${DOMAIN_CONTROLLER_ADMIN_USERNAME:=dcadmin}"
+        : "${DOMAIN_CONTROLLER_SCRIPTS_STORAGE_ACCOUNT_NAME:=driftwooddcscripts}"
+        : "${CLOUD_CONNECTOR_ADMIN_USERNAME:=ctxadmin}"
+        : "${CLOUD_CONNECTOR_SCRIPTS_STORAGE_ACCOUNT_NAME:=driftwoodccscripts}"
+        : "${GITHUB_RUNNER_NAME:=driftwood-gh-runner}"
+        : "${GITHUB_RUNNER_VM_SIZE:=Standard_B2s}"
+        : "${GITHUB_RUNNER_ADMIN_USERNAME:=ghrunner}"
+        : "${ENABLE_RUNNER_TEMPORARY_SSH_ACCESS:=false}"
+        : "${ARTIFACT_STORAGE_CONTAINER_NAME:=image-build-artifacts}"
+
+        # admin_source_ip_cidr is genuinely optional/null in Terraform (not
+        # just a string with a default) - needs a real JSON null, not "".
+        if [ -z "$ADMIN_SOURCE_IP_CIDR" ]; then
+          admin_source_ip_cidr_json=null
+        else
+          admin_source_ip_cidr_json=$(jq -n --arg v "$ADMIN_SOURCE_IP_CIDR" '$v')
+        fi
+
+        jq -n \
+          --arg location "$LOCATION" \
+          --arg resource_group_name "$RESOURCE_GROUP_NAME" \
+          --argjson tags "$TAGS_JSON" \
+          --argjson enable_scheduled_shutdown "$ENABLE_SCHEDULED_SHUTDOWN" \
+          --arg scheduled_shutdown_time "$SCHEDULED_SHUTDOWN_TIME" \
+          --arg scheduled_shutdown_timezone "$SCHEDULED_SHUTDOWN_TIMEZONE" \
+          --arg vnet_name "$VNET_NAME" \
+          --argjson vnet_address_space "$VNET_ADDRESS_SPACE_JSON" \
+          --argjson vda_subnet_address_prefixes "$VDA_SUBNET_ADDRESS_PREFIXES_JSON" \
+          --arg hosting_connection_app_name "$HOSTING_CONNECTION_APP_NAME" \
+          --arg azure_subscription_id "$AZURE_SUBSCRIPTION_ID" \
+          --arg azure_tenant_id "$AZURE_TENANT_ID" \
+          --arg citrix_customer_id "$CITRIX_CUSTOMER_ID" \
+          --arg citrix_client_id "$CITRIX_CLIENT_ID" \
+          --arg citrix_environment "$CITRIX_ENVIRONMENT" \
+          --arg citrix_resource_location_name "$CITRIX_RESOURCE_LOCATION_NAME" \
+          --arg citrix_zone_description "$CITRIX_ZONE_DESCRIPTION" \
+          --arg citrix_hypervisor_name "$CITRIX_HYPERVISOR_NAME" \
+          --arg citrix_resource_pool_name "$CITRIX_RESOURCE_POOL_NAME" \
+          --argjson delivery_group_dev "$DELIVERY_GROUP_DEV_CONFIG_JSON" \
+          --argjson delivery_group_test "$DELIVERY_GROUP_TEST_CONFIG_JSON" \
+          --argjson delivery_group_prod "$DELIVERY_GROUP_PROD_CONFIG_JSON" \
+          --arg citrix_allocation_type "$CITRIX_ALLOCATION_TYPE" \
+          --arg citrix_vda_service_offering "$CITRIX_VDA_SERVICE_OFFERING" \
+          --arg citrix_vda_storage_type "$CITRIX_VDA_STORAGE_TYPE" \
+          --arg active_directory_domain_fqdn "$ACTIVE_DIRECTORY_DOMAIN_FQDN" \
+          --arg active_directory_domain_netbios_name "$ACTIVE_DIRECTORY_DOMAIN_NETBIOS_NAME" \
+          --arg active_directory_safe_mode_password "$ACTIVE_DIRECTORY_SAFE_MODE_PASSWORD" \
+          --arg active_directory_service_account_name "$ACTIVE_DIRECTORY_SERVICE_ACCOUNT_NAME" \
+          --arg active_directory_service_account_password "$ACTIVE_DIRECTORY_SERVICE_ACCOUNT_PASSWORD" \
+          --arg active_directory_base_ou_name "$ACTIVE_DIRECTORY_BASE_OU_NAME" \
+          --arg active_directory_vda_ou_name "$ACTIVE_DIRECTORY_VDA_OU_NAME" \
+          --arg active_directory_connector_ou_name "$ACTIVE_DIRECTORY_CONNECTOR_OU_NAME" \
+          --arg active_directory_dev_desktop_group_name "$ACTIVE_DIRECTORY_DEV_DESKTOP_GROUP_NAME" \
+          --arg active_directory_test_desktop_group_name "$ACTIVE_DIRECTORY_TEST_DESKTOP_GROUP_NAME" \
+          --arg active_directory_prod_desktop_group_name "$ACTIVE_DIRECTORY_PROD_DESKTOP_GROUP_NAME" \
+          --arg domain_controller_admin_username "$DOMAIN_CONTROLLER_ADMIN_USERNAME" \
+          --arg domain_controller_admin_password "$DOMAIN_CONTROLLER_ADMIN_PASSWORD" \
+          --arg domain_controller_scripts_storage_account_name "$DOMAIN_CONTROLLER_SCRIPTS_STORAGE_ACCOUNT_NAME" \
+          --arg cloud_connector_admin_username "$CLOUD_CONNECTOR_ADMIN_USERNAME" \
+          --arg cloud_connector_admin_password "$CLOUD_CONNECTOR_ADMIN_PASSWORD" \
+          --arg cloud_connector_client_id "$CLOUD_CONNECTOR_CLIENT_ID" \
+          --arg cloud_connector_client_secret "$CLOUD_CONNECTOR_CLIENT_SECRET" \
+          --arg cloud_connector_installer_url "$CLOUD_CONNECTOR_INSTALLER_URL" \
+          --arg cloud_connector_scripts_storage_account_name "$CLOUD_CONNECTOR_SCRIPTS_STORAGE_ACCOUNT_NAME" \
+          --arg github_runner_name "$GITHUB_RUNNER_NAME" \
+          --arg github_runner_vm_size "$GITHUB_RUNNER_VM_SIZE" \
+          --arg github_runner_admin_username "$GITHUB_RUNNER_ADMIN_USERNAME" \
+          --arg github_runner_admin_ssh_public_key "$GITHUB_RUNNER_ADMIN_SSH_PUBLIC_KEY" \
+          --argjson enable_runner_temporary_ssh_access "$ENABLE_RUNNER_TEMPORARY_SSH_ACCESS" \
+          --argjson admin_source_ip_cidr "$admin_source_ip_cidr_json" \
+          --arg gallery_name "$GALLERY_NAME" \
+          --arg image_definition_name "$IMAGE_DEFINITION_NAME" \
+          --arg image_sku "$IMAGE_SKU" \
+          --arg artifact_storage_account_name "$ARTIFACT_STORAGE_ACCOUNT_NAME" \
+          --arg artifact_storage_container_name "$ARTIFACT_STORAGE_CONTAINER_NAME" \
+          '{
+            location: $location,
+            resource_group_name: $resource_group_name,
+            tags: $tags,
+            enable_scheduled_shutdown: $enable_scheduled_shutdown,
+            scheduled_shutdown_time: $scheduled_shutdown_time,
+            scheduled_shutdown_timezone: $scheduled_shutdown_timezone,
+            vnet_name: $vnet_name,
+            vnet_address_space: $vnet_address_space,
+            vda_subnet_address_prefixes: $vda_subnet_address_prefixes,
+            hosting_connection_app_name: $hosting_connection_app_name,
+            azure_subscription_id: $azure_subscription_id,
+            azure_tenant_id: $azure_tenant_id,
+            citrix_customer_id: $citrix_customer_id,
+            citrix_client_id: $citrix_client_id,
+            citrix_environment: $citrix_environment,
+            citrix_resource_location_name: $citrix_resource_location_name,
+            citrix_zone_description: $citrix_zone_description,
+            citrix_hypervisor_name: $citrix_hypervisor_name,
+            citrix_resource_pool_name: $citrix_resource_pool_name,
+            delivery_groups: {
+              dev: $delivery_group_dev,
+              test: $delivery_group_test,
+              prod: $delivery_group_prod
+            },
+            citrix_allocation_type: $citrix_allocation_type,
+            citrix_vda_service_offering: $citrix_vda_service_offering,
+            citrix_vda_storage_type: $citrix_vda_storage_type,
+            active_directory_domain_fqdn: $active_directory_domain_fqdn,
+            active_directory_domain_netbios_name: $active_directory_domain_netbios_name,
+            active_directory_safe_mode_password: $active_directory_safe_mode_password,
+            active_directory_service_account_name: $active_directory_service_account_name,
+            active_directory_service_account_password: $active_directory_service_account_password,
+            active_directory_base_ou_name: $active_directory_base_ou_name,
+            active_directory_vda_ou_name: $active_directory_vda_ou_name,
+            active_directory_connector_ou_name: $active_directory_connector_ou_name,
+            active_directory_dev_desktop_group_name: $active_directory_dev_desktop_group_name,
+            active_directory_test_desktop_group_name: $active_directory_test_desktop_group_name,
+            active_directory_prod_desktop_group_name: $active_directory_prod_desktop_group_name,
+            domain_controller_admin_username: $domain_controller_admin_username,
+            domain_controller_admin_password: $domain_controller_admin_password,
+            domain_controller_scripts_storage_account_name: $domain_controller_scripts_storage_account_name,
+            cloud_connector_admin_username: $cloud_connector_admin_username,
+            cloud_connector_admin_password: $cloud_connector_admin_password,
+            cloud_connector_client_id: $cloud_connector_client_id,
+            cloud_connector_client_secret: $cloud_connector_client_secret,
+            cloud_connector_installer_url: $cloud_connector_installer_url,
+            cloud_connector_scripts_storage_account_name: $cloud_connector_scripts_storage_account_name,
+            github_runner_name: $github_runner_name,
+            github_runner_vm_size: $github_runner_vm_size,
+            github_runner_admin_username: $github_runner_admin_username,
+            github_runner_admin_ssh_public_key: $github_runner_admin_ssh_public_key,
+            enable_runner_temporary_ssh_access: $enable_runner_temporary_ssh_access,
+            admin_source_ip_cidr: $admin_source_ip_cidr,
+            gallery_name: $gallery_name,
+            image_definition_name: $image_definition_name,
+            image_sku: $image_sku,
+            artifact_storage_account_name: $artifact_storage_account_name,
+            artifact_storage_container_name: $artifact_storage_container_name
+          }' > ci.auto.tfvars.json

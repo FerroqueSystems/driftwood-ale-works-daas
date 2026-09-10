@@ -67,12 +67,25 @@ name: citrix-image-rotation
 # This workflow needs the full non-secret environment config (everything in
 # terraform.tfvars.example) and the Packer build vars (everything in
 # packer/images/win11-azure.pkrvars.hcl.example) available in CI, since both
-# files are gitignored/local-only. Rather than wiring dozens of individual
-# repo variables, it decodes two JSON secrets - TERRAFORM_TFVARS_JSON and
-# PACKER_BUILD_VARS_JSON - into gitignored *.auto.tfvars.json /
-# *.auto.pkrvars.json files at runtime. See the top-level README's secrets
-# list for what each must contain, including the new
-# CITRIX_MAINTENANCE_CLIENT_ID/_SECRET the drain step needs.
+# files are gitignored/local-only. Rather than one big JSON blob secret, each
+# real value is its own named GitHub secret or variable (see the top-level
+# README's secrets/variables table) - two local composite actions
+# (.github/actions/write-citrix-tfvars, .github/actions/write-packer-vars)
+# assemble them into gitignored *.auto.tfvars.json/*.auto.pkrvars.json files
+# at runtime. The "Write Terraform vars"/"Write Packer build vars" steps
+# below are defined once (in the "build" job) and reused via YAML anchors
+# (&write_citrix_tfvars/&write_packer_vars, referenced as *write_citrix_tfvars/
+# *write_packer_vars elsewhere) rather than repeating the same ~55-key
+# `with:` block in every job that needs it.
+#
+# delivery_groups (dev/test/prod config - name, published desktop, access
+# list, autoscale schedule) is split into three separately-named repo-level
+# variables (DELIVERY_GROUP_DEV/TEST/PROD_CONFIG_JSON) rather than scoped to
+# each environment's own GitHub Environment - a job declaring one
+# environment (e.g. citrix-cutover-approval-test) cannot read another
+# environment's scoped variables, but every apply needs the *complete*
+# delivery_groups map (all three) regardless of which one it's cutting over,
+# or Terraform destroys whichever environments are missing from it.
 
 on:
   workflow_dispatch:
@@ -124,11 +137,13 @@ env:
   ROTATION_FILE: environments/citrix-azure/rotation.auto.tfvars.json
   # Fixed per-environment machine counts for the automatic push-triggered
   # jobs, since there's no human filling in a workflow_dispatch input for
-  # those - matches the demo counts already seeded in rotation.auto.tfvars.json.
-  DEV_TOTAL_MACHINES: 3
-  TEST_TOTAL_MACHINES: 5
-  PROD_TOTAL_MACHINES: 20
-  OUTSTANDING_IMAGE_LABEL_THRESHOLD: 5
+  # those - repo Variables now (falling back to the original demo counts if
+  # unset) instead of literals, so they're visible/adjustable from repo
+  # Settings without a code change.
+  DEV_TOTAL_MACHINES: ${{ vars.DEV_TOTAL_MACHINES || 3 }}
+  TEST_TOTAL_MACHINES: ${{ vars.TEST_TOTAL_MACHINES || 5 }}
+  PROD_TOTAL_MACHINES: ${{ vars.PROD_TOTAL_MACHINES || 20 }}
+  OUTSTANDING_IMAGE_LABEL_THRESHOLD: ${{ vars.OUTSTANDING_IMAGE_LABEL_THRESHOLD || 5 }}
 
 jobs:
   build:
@@ -154,9 +169,67 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Write Terraform vars
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+      - &write_citrix_tfvars
+        name: Write Terraform vars
+        uses: ./.github/actions/write-citrix-tfvars
+        with:
+          working_directory: ${{ env.TF_WORKDIR }}
+          location: ${{ vars.LOCATION }}
+          resource_group_name: ${{ vars.RESOURCE_GROUP_NAME }}
+          tags_json: ${{ vars.TAGS_JSON }}
+          enable_scheduled_shutdown: ${{ vars.ENABLE_SCHEDULED_SHUTDOWN }}
+          scheduled_shutdown_time: ${{ vars.SCHEDULED_SHUTDOWN_TIME }}
+          scheduled_shutdown_timezone: ${{ vars.SCHEDULED_SHUTDOWN_TIMEZONE }}
+          vnet_name: ${{ vars.VNET_NAME }}
+          vnet_address_space_json: ${{ vars.VNET_ADDRESS_SPACE_JSON }}
+          vda_subnet_address_prefixes_json: ${{ vars.VDA_SUBNET_ADDRESS_PREFIXES_JSON }}
+          hosting_connection_app_name: ${{ vars.HOSTING_CONNECTION_APP_NAME }}
+          azure_subscription_id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          azure_tenant_id: ${{ secrets.ARM_TENANT_ID }}
+          citrix_customer_id: ${{ secrets.CITRIX_CUSTOMER_ID }}
+          citrix_client_id: ${{ secrets.CITRIX_CLIENT_ID }}
+          citrix_environment: ${{ vars.CITRIX_ENVIRONMENT }}
+          citrix_resource_location_name: ${{ vars.CITRIX_RESOURCE_LOCATION_NAME }}
+          citrix_zone_description: ${{ vars.CITRIX_ZONE_DESCRIPTION }}
+          citrix_hypervisor_name: ${{ vars.CITRIX_HYPERVISOR_NAME }}
+          citrix_resource_pool_name: ${{ vars.CITRIX_RESOURCE_POOL_NAME }}
+          delivery_group_dev_config_json: ${{ vars.DELIVERY_GROUP_DEV_CONFIG_JSON }}
+          delivery_group_test_config_json: ${{ vars.DELIVERY_GROUP_TEST_CONFIG_JSON }}
+          delivery_group_prod_config_json: ${{ vars.DELIVERY_GROUP_PROD_CONFIG_JSON }}
+          citrix_allocation_type: ${{ vars.CITRIX_ALLOCATION_TYPE }}
+          citrix_vda_service_offering: ${{ vars.CITRIX_VDA_SERVICE_OFFERING }}
+          citrix_vda_storage_type: ${{ vars.CITRIX_VDA_STORAGE_TYPE }}
+          active_directory_domain_fqdn: ${{ vars.ACTIVE_DIRECTORY_DOMAIN_FQDN }}
+          active_directory_domain_netbios_name: ${{ vars.ACTIVE_DIRECTORY_DOMAIN_NETBIOS_NAME }}
+          active_directory_safe_mode_password: ${{ secrets.ACTIVE_DIRECTORY_SAFE_MODE_PASSWORD }}
+          active_directory_service_account_name: ${{ vars.ACTIVE_DIRECTORY_SERVICE_ACCOUNT_NAME }}
+          active_directory_service_account_password: ${{ secrets.ACTIVE_DIRECTORY_SERVICE_ACCOUNT_PASSWORD }}
+          active_directory_base_ou_name: ${{ vars.ACTIVE_DIRECTORY_BASE_OU_NAME }}
+          active_directory_vda_ou_name: ${{ vars.ACTIVE_DIRECTORY_VDA_OU_NAME }}
+          active_directory_connector_ou_name: ${{ vars.ACTIVE_DIRECTORY_CONNECTOR_OU_NAME }}
+          active_directory_dev_desktop_group_name: ${{ vars.ACTIVE_DIRECTORY_DEV_DESKTOP_GROUP_NAME }}
+          active_directory_test_desktop_group_name: ${{ vars.ACTIVE_DIRECTORY_TEST_DESKTOP_GROUP_NAME }}
+          active_directory_prod_desktop_group_name: ${{ vars.ACTIVE_DIRECTORY_PROD_DESKTOP_GROUP_NAME }}
+          domain_controller_admin_username: ${{ vars.DOMAIN_CONTROLLER_ADMIN_USERNAME }}
+          domain_controller_admin_password: ${{ secrets.DOMAIN_CONTROLLER_ADMIN_PASSWORD }}
+          domain_controller_scripts_storage_account_name: ${{ vars.DOMAIN_CONTROLLER_SCRIPTS_STORAGE_ACCOUNT_NAME }}
+          cloud_connector_admin_username: ${{ vars.CLOUD_CONNECTOR_ADMIN_USERNAME }}
+          cloud_connector_admin_password: ${{ secrets.CLOUD_CONNECTOR_ADMIN_PASSWORD }}
+          cloud_connector_client_id: ${{ secrets.CLOUD_CONNECTOR_CLIENT_ID }}
+          cloud_connector_client_secret: ${{ secrets.CLOUD_CONNECTOR_CLIENT_SECRET }}
+          cloud_connector_installer_url: ${{ secrets.CLOUD_CONNECTOR_INSTALLER_URL }}
+          cloud_connector_scripts_storage_account_name: ${{ vars.CLOUD_CONNECTOR_SCRIPTS_STORAGE_ACCOUNT_NAME }}
+          github_runner_name: ${{ vars.GITHUB_RUNNER_NAME }}
+          github_runner_vm_size: ${{ vars.GITHUB_RUNNER_VM_SIZE }}
+          github_runner_admin_username: ${{ vars.GITHUB_RUNNER_ADMIN_USERNAME }}
+          github_runner_admin_ssh_public_key: ${{ secrets.GITHUB_RUNNER_ADMIN_SSH_PUBLIC_KEY }}
+          enable_runner_temporary_ssh_access: ${{ vars.ENABLE_RUNNER_TEMPORARY_SSH_ACCESS }}
+          admin_source_ip_cidr: ${{ secrets.ADMIN_SOURCE_IP_CIDR }}
+          gallery_name: ${{ vars.GALLERY_NAME }}
+          image_definition_name: ${{ vars.IMAGE_DEFINITION_NAME }}
+          image_sku: ${{ vars.IMAGE_SKU }}
+          artifact_storage_account_name: ${{ vars.ARTIFACT_STORAGE_ACCOUNT_NAME }}
+          artifact_storage_container_name: ${{ vars.ARTIFACT_STORAGE_CONTAINER_NAME }}
 
       # Packer only publishes a new image *version* into an already-existing
       # Shared Image Gallery/image definition (module.image_gallery) - it
@@ -180,9 +253,37 @@ jobs:
         with:
           version: latest
 
-      - name: Write Packer build vars
-        working-directory: packer/images
-        run: echo '${{ secrets.PACKER_BUILD_VARS_JSON }}' > ci.auto.pkrvars.json
+      - &write_packer_vars
+        name: Write Packer build vars
+        uses: ./.github/actions/write-packer-vars
+        with:
+          working_directory: packer/images
+          subscription_id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          location: ${{ vars.LOCATION }}
+          resource_group_name: ${{ vars.RESOURCE_GROUP_NAME }}
+          gallery_name: ${{ vars.GALLERY_NAME }}
+          image_definition_name: ${{ vars.IMAGE_DEFINITION_NAME }}
+          azure_imgpublisher: ${{ vars.AZURE_IMGPUBLISHER }}
+          azure_imgoffer: ${{ vars.AZURE_IMGOFFER }}
+          azure_imgsku: ${{ vars.AZURE_IMGSKU }}
+          azure_imgversion: ${{ vars.AZURE_IMGVERSION }}
+          install_chocolatey_packages: ${{ vars.INSTALL_CHOCOLATEY_PACKAGES }}
+          chocolatey_packages_json: ${{ vars.CHOCOLATEY_PACKAGES_JSON }}
+          install_m365_apps: ${{ vars.INSTALL_M365_APPS }}
+          m365_apps_odt_url: ${{ vars.M365_APPS_ODT_URL }}
+          install_citrix_vda: ${{ vars.INSTALL_CITRIX_VDA }}
+          citrix_vda_installer_url: ${{ secrets.CITRIX_VDA_INSTALLER_URL }}
+          citrix_vda_installer_args: ${{ vars.CITRIX_VDA_INSTALLER_ARGS }}
+          install_cloudpaging_player: ${{ vars.INSTALL_CLOUDPAGING_PLAYER }}
+          cloudpaging_player_installer_url: ${{ secrets.CLOUDPAGING_PLAYER_INSTALLER_URL }}
+          cloudpaging_player_installer_args: ${{ vars.CLOUDPAGING_PLAYER_INSTALLER_ARGS }}
+          run_citrix_optimizer: ${{ vars.RUN_CITRIX_OPTIMIZER }}
+          citrix_optimizer_zip_url: ${{ secrets.CITRIX_OPTIMIZER_ZIP_URL }}
+          citrix_optimizer_template_name: ${{ vars.CITRIX_OPTIMIZER_TEMPLATE_NAME }}
+          prepare_for_citrix_mcs: ${{ vars.PREPARE_FOR_CITRIX_MCS }}
+          local_admin_username: ${{ secrets.VDA_LOCAL_ADMIN_USERNAME }}
+          local_admin_password: ${{ secrets.VDA_LOCAL_ADMIN_PASSWORD }}
+          managed_image_tags_json: ${{ vars.MANAGED_IMAGE_TAGS_JSON }}
 
       # Re-running "build" (e.g. to retry a later step after Packer already
       # succeeded) would otherwise always fail here - Packer refuses to
@@ -314,9 +415,7 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Write Terraform vars
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+      - *write_citrix_tfvars
 
       - name: terraform apply
         working-directory: ${{ env.TF_WORKDIR }}
@@ -378,9 +477,7 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Write Terraform vars
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+      - *write_citrix_tfvars
 
       - name: terraform apply
         working-directory: ${{ env.TF_WORKDIR }}
@@ -447,9 +544,7 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Write Terraform vars
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+      - *write_citrix_tfvars
 
       - name: terraform plan
         working-directory: ${{ env.TF_WORKDIR }}
@@ -484,9 +579,7 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Write Terraform vars
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+      - *write_citrix_tfvars
 
       - uses: actions/download-artifact@v4
         with:
@@ -518,9 +611,7 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Write Terraform vars
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+      - *write_citrix_tfvars
 
       # Branch-slug + short-SHA label, decoupled from the Azure Compute
       # Gallery version below - see this workflow's header comment. The
@@ -567,9 +658,7 @@ jobs:
         with:
           version: latest
 
-      - name: Write Packer build vars
-        working-directory: packer/images
-        run: echo '${{ secrets.PACKER_BUILD_VARS_JSON }}' > ci.auto.pkrvars.json
+      - *write_packer_vars
 
       - name: Check whether this image version was already published
         id: image_check
@@ -680,9 +769,7 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Write Terraform vars
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+      - *write_citrix_tfvars
 
       # No Packer build here - the image being promoted is already
       # published (dev already cut over to it). This job only stages+cuts
@@ -770,9 +857,7 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Write Terraform vars
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: echo '${{ secrets.TERRAFORM_TFVARS_JSON }}' > ci.auto.tfvars.json
+      - *write_citrix_tfvars
 
       - name: Find what's currently live in test
         id: source

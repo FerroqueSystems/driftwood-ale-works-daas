@@ -45,7 +45,7 @@ terraform.rc
 
 # Local Claude Code settings (auto-recorded permission allowances etc.) -
 # machine/session-specific, not project config
-.claude/settings.json
+.claude/
 
 # Python bytecode cache from running scripts/*.py locally
 __pycache__/
