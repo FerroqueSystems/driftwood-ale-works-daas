@@ -5,6 +5,17 @@
 location            = "eastus"
 resource_group_name = "rg-driftwood-citrix-daas"
 
+# This is a temporary demo environment, torn down after the conference -
+# every Terraform-managed VM (domain controllers, Cloud Connectors, the
+# GitHub runner) gets Azure's native auto-shutdown schedule by default so
+# nothing keeps costing money if left running by accident. Doesn't cover
+# Citrix MCS-provisioned VDAs (see delivery_groups' power_time_schemes
+# below for those) - see scripts/manage-demo-vms.ps1 for ad-hoc start/stop
+# of everything, VDAs included.
+enable_scheduled_shutdown   = true
+scheduled_shutdown_time     = "1900"
+scheduled_shutdown_timezone = "Eastern Standard Time"
+
 # --- Networking ---
 vnet_name                   = "vnet-driftwood-citrix-daas"
 vnet_address_space          = ["10.50.0.0/16"]
@@ -59,14 +70,15 @@ citrix_vda_storage_type     = "StandardSSD_LRS"
 # --- Delivery groups: one per environment (Dev/Test/Prod), each with its own
 # name, published desktop, access list, autoscale schedule, and the
 # catalog-naming conventions citrix-image-rotation.yml seeds new builds with.
-# Entra ID group object IDs below are placeholders - replace with the real
-# Dev/QA/Prod access group object IDs, wrapped in Citrix's
-# "OID:/azuread/<object_id>" form.
+# Access list entries are AD groups in "<NETBIOS>\<GroupName>" form -
+# modules/domain-controllers creates the three groups referenced below
+# automatically (see active_directory_dev/test/prod_desktop_group_name
+# below), so these values work as-is once the domain is stood up.
 delivery_groups = {
   dev = {
     name                                  = "Driftwood Ale Works - Development"
     published_desktop_name                = "Driftwood Dev Desktop"
-    desktop_restricted_access_allow_list  = ["OID:/azuread/00000000-0000-0000-0000-000000000001"]
+    desktop_restricted_access_allow_list  = ["DRIFTWOOD\\Driftwood Dev Desktop Users"]
     autoscale_enabled                     = true
     autoscale_timezone                    = "Eastern Standard Time"
     catalog_name_prefix                   = "driftwood-win11-dev"
@@ -89,7 +101,7 @@ delivery_groups = {
   test = {
     name                                  = "Driftwood Ale Works - QA Testing"
     published_desktop_name                = "Driftwood QA Desktop"
-    desktop_restricted_access_allow_list  = ["OID:/azuread/00000000-0000-0000-0000-000000000002"]
+    desktop_restricted_access_allow_list  = ["DRIFTWOOD\\Driftwood QA Desktop Users"]
     autoscale_enabled                     = true
     autoscale_timezone                    = "Eastern Standard Time"
     catalog_name_prefix                   = "driftwood-win11-test"
@@ -112,28 +124,65 @@ delivery_groups = {
   prod = {
     name                                  = "Driftwood Ale Works - Production"
     published_desktop_name                = "Driftwood Ale Works Desktop"
-    desktop_restricted_access_allow_list  = ["OID:/azuread/00000000-0000-0000-0000-000000000003"]
+    desktop_restricted_access_allow_list  = ["DRIFTWOOD\\Driftwood Prod Desktop Users"]
     autoscale_enabled                     = true
-    autoscale_timezone                    = "Eastern Standard Time"
+    autoscale_timezone                    = "Central Standard Time"
     catalog_name_prefix                   = "driftwood-win11-prod"
     machine_naming_scheme                 = "dw-prod-vda-##"
-    # Prod stays mostly on around the clock (never scales below a floor),
-    # with a modest peak-hours boost for the business day.
+    # This is a temporary demo environment (torn down after the
+    # conference), not real production traffic - nothing powered on outside
+    # business hours (weekdays only; nothing on weekends either). Assumed
+    # weekdays-only to match Dev/Test's pattern - widen days_of_week below
+    # if you actually want weekend coverage.
     power_time_schemes = [
       {
-        days_of_week          = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        display_name          = "Prod always-on with weekday peak"
-        peak_time_ranges      = ["08:00-18:00"]
+        days_of_week          = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        display_name          = "Prod weekday business hours (Central)"
+        peak_time_ranges      = ["08:00-17:00"]
         pool_using_percentage = true
         pool_size_schedules = [
-          { time_range = "00:00-08:00", pool_size = 40 },
-          { time_range = "08:00-18:00", pool_size = 100 },
-          { time_range = "18:00-24:00", pool_size = 40 },
+          { time_range = "08:00-10:00", pool_size = 20 },
+          { time_range = "10:00-17:00", pool_size = 10 },
         ]
       }
     ]
   }
 }
+
+# --- Active Directory (new forest - modules/domain-controllers,
+# modules/cloud-connectors, modules/citrix). Defaults are demo-ready; the
+# passwords below are placeholders you must fill in yourself, never commit
+# a real value. ---
+active_directory_domain_fqdn         = "driftwood.local"
+active_directory_domain_netbios_name = "DRIFTWOOD"
+active_directory_safe_mode_password  = "REPLACE_ME"
+active_directory_service_account_password = "REPLACE_ME"
+# active_directory_service_account_name, _base_ou_name, _vda_ou_name,
+# _connector_ou_name, and _{dev,test,prod}_desktop_group_name all have
+# sensible defaults (see variables.tf) - override only if you want different
+# names.
+
+# --- Domain controllers (modules/domain-controllers) ---
+domain_controller_admin_username = "dcadmin"
+domain_controller_admin_password = "REPLACE_ME"
+# domain_controller_scripts_storage_account_name defaults to
+# "driftwooddcscripts" - must be globally unique across all of Azure, change
+# it if that name is already taken.
+
+# --- Cloud Connectors (modules/cloud-connectors) ---
+cloud_connector_admin_username = "ctxadmin"
+cloud_connector_admin_password = "REPLACE_ME"
+# A Citrix Cloud API client dedicated to Cloud Connector registration -
+# create a "Secure Client" in Citrix Cloud > Identity and Access Management
+# > API Access, separate from citrix_client_id above.
+cloud_connector_client_id     = "your-cloud-connector-api-client-id"
+cloud_connector_client_secret = "REPLACE_ME"
+# Upload the Cloud Connector installer to the artifact-storage container
+# (see modules/cloud-connectors/README.md), then generate a read-only SAS
+# URL for it.
+cloud_connector_installer_url = "https://driftwoodctximages.blob.core.windows.net/image-build-artifacts/CWCConnector.exe?REPLACE_ME_SAS_TOKEN"
+# cloud_connector_scripts_storage_account_name defaults to
+# "driftwoodccscripts" - must be globally unique, change it if taken.
 
 # --- Self-hosted GitHub Actions runner (for citrix-image-rotation.yml) ---
 github_runner_name    = "driftwood-gh-runner"

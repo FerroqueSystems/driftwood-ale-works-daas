@@ -31,10 +31,7 @@ Terraform provider:
   rather than one resource group shared by every catalog/environment, so
   different rotation generations (or different environments) never share
   VMs/NICs/disks and can't collide or bleed into each other during
-  cutover/decommission. The Template Spec machine profile
-  (`var.machine_profile_resource_group_name`) is a separate, manually-created
-  shared asset and intentionally stays in one resource group across every
-  build - see "Machine identity and machine profile" below.
+  cutover/decommission.
 
 ## Monthly image/catalog rotation, per environment
 
@@ -112,92 +109,30 @@ This is driven end-to-end by
    deletion cascades over anything left inside it regardless of Terraform's
    own tracking, and destroys are idempotent.
 
-## Machine identity and machine profile
+## Machine identity
 
-Machine identity is `AzureAD` (Entra ID-joined) - no traditional AD domain.
-`identity_type = "AzureAD"` requires a `machine_profile` (Citrix derives
-machine defaults - size, boot diagnostics, OS disk caching, accelerated
-networking - from it, since it can't infer them from an AD OU). Two things
-that aren't obvious from Citrix's docs, found by testing directly against
-the API (`citrix/citrix` provider v1.0.38):
+Machine identity is `ActiveDirectory` - VDAs join the traditional AD domain
+[modules/domain-controllers](../domain-controllers/README.md) creates, and
+brokering goes through the Cloud Connectors in
+[modules/cloud-connectors](../cloud-connectors/README.md) (required in the
+zone for AD-domain-joined machine catalogs - Citrix Cloud has no other path
+to reach them). This replaced an earlier Entra ID-joined
+(`identity_type = "AzureAD"`) design after real device-join issues in
+production with no time to chase down before a deadline.
 
-- **`machine_profile` must be an Azure Template Spec, not a VM reference,
-  when the catalog also has `machine_profile` set alongside a gallery-image
-  source.** A VM-based profile fails with an unhelpful "machine_profile
-  cannot be specified when using prepared image without a machine profile"
-  error - regardless of `machine_profile`'s form.
-- **The machine catalog uses `azure_master_image` (direct
-  gallery/definition/version reference), not `prepared_image`** (which
-  references the `citrix_image_version` resource by ID). `prepared_image` +
-  `machine_profile` + `identity_type = "AzureAD"` hits that same validation
-  error no matter what form `machine_profile` takes - this looks like an
-  unresolved provider bug specific to that three-way combination.
-  `citrix_image_version` is still created (for Image Management visibility
-  in the Citrix Cloud console), it's just not referenced by the catalog.
+`identity_type = "ActiveDirectory"` needs a `machine_domain_identity` block
+(`domain`, `domain_ou`, `service_account`, `service_account_password` - see
+`main.tf`) instead of a `machine_profile`. Confirmed against the
+`citrix/citrix` provider's own schema docs: `machine_profile` is only
+required when `identity_type` is `AzureAD` (or `provisioning_type` is
+`PVSStreaming`, not applicable here) - so this module no longer sets it at
+all, which also removes the out-of-band Azure Template Spec creation step
+(`az ts create`) the previous Entra ID-joined design required. `azure_master_image`
+(direct gallery/definition/version reference, not `prepared_image`) is kept
+as-is - no identity-specific quirk applies to that choice either way.
 
-### Creating the machine profile Template Spec
-
-Not Terraform-managed - created once, out-of-band, via `az ts create`. It
-must contain **only** generic hardware properties, not VM/OS-instance-specific
-ones (no `osProfile`, no `imageReference`, no `securityProfile` - `Standard`
-is explicitly rejected):
-
-```json
-{
-  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-  "contentVersion": "1.0.0.0",
-  "resources": [
-    {
-      "type": "Microsoft.Network/networkInterfaces",
-      "apiVersion": "2023-09-01",
-      "name": "<profile-nic-name>",
-      "location": "<region>",
-      "properties": {
-        "enableAcceleratedNetworking": false,
-        "ipConfigurations": [{
-          "name": "internal",
-          "properties": {
-            "primary": true,
-            "privateIPAllocationMethod": "Dynamic",
-            "subnet": { "id": "<vda-subnet-resource-id>" }
-          }
-        }]
-      }
-    },
-    {
-      "type": "Microsoft.Compute/virtualMachines",
-      "apiVersion": "2023-09-01",
-      "name": "<profile-vm-name>",
-      "location": "<region>",
-      "dependsOn": ["[resourceId('Microsoft.Network/networkInterfaces', '<profile-nic-name>')]"],
-      "properties": {
-        "hardwareProfile": { "vmSize": "<same SKU as citrix_vda_service_offering>" },
-        "diagnosticsProfile": { "bootDiagnostics": { "enabled": false } },
-        "storageProfile": { "osDisk": { "caching": "ReadWrite", "osType": "Windows" } },
-        "networkProfile": {
-          "networkInterfaces": [{
-            "id": "[resourceId('Microsoft.Network/networkInterfaces', '<profile-nic-name>')]",
-            "properties": { "primary": true }
-          }]
-        }
-      }
-    }
-  ]
-}
-```
-
-`osDisk.osType` is required and must match the VDA image's OS ("Windows"
-here) - omitting it or leaving it as the OS of some unrelated VM you exported
-the template from (e.g. a Linux self-hosted runner) fails with "Invalid OS
-type setting" or a deployment-time "Changing property 'osDisk.osType' is not
-allowed" error respectively.
-
-```bash
-az ts create --name <name> --version <version> \
-  --resource-group <rg> --location <region> \
-  --template-file <path-to-template-above>
-```
-
-Then set `machine_profile_template_spec_name` / `_version` /
-`_resource_group_name` in `environments/citrix-azure/terraform.tfvars` to
-match.
+The domain, OU, and service account referenced here are created by
+`modules/domain-controllers`' bootstrap scripts, not by this module - see
+that module's README for exactly how (including a deliberate demo-only
+simplification: the service account is a Domain Admin, not a
+least-privilege OU delegation).

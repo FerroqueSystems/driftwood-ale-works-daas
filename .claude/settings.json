@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(terraform validate *)",
-      "Bash(py --version)"
+      "Bash(py --version)",
+      "Bash(terraform fmt *)",
+      "Bash(rm -rf .terraform)",
+      "Bash(terraform init *)"
     ]
   }
 }

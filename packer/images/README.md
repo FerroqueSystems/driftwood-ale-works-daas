@@ -125,13 +125,12 @@ Sources:
 
 ## Local Admin Account
 
-The AzureAD-joined VDAs this repo provisions (see
-[modules/citrix/README.md](../../modules/citrix/README.md)) have no
-traditional AD domain, so the intended login path via Bastion is native RDP
-with Entra ID credentials, not a shared local account. If you also want a
-break-glass local admin baked into the image for troubleshooting outside
-Entra auth, set both variables - leaving `local_admin_username` empty skips
-account creation entirely:
+The AD-domain-joined VDAs this repo provisions (see
+[modules/citrix/README.md](../../modules/citrix/README.md)) normally use
+domain credentials for RDP over Bastion. If you also want a break-glass
+local admin baked into the image for troubleshooting when the domain itself
+is unreachable, set both variables - leaving `local_admin_username` empty
+skips account creation entirely:
 
 ```hcl
 local_admin_username = "ferroadmin"

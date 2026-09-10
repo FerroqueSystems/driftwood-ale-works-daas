@@ -9,7 +9,7 @@ variable "location" {
 }
 
 variable "subnet_id" {
-  description = "Subnet ID the runner VM is placed in (the shared Cloud Connector/VDA subnet from modules/network) - it needs network line-of-sight to the Cloud Connector VMs to run Ansible over WinRM"
+  description = "Subnet ID the runner VM is placed in (the shared domain controller/Cloud Connector/VDA subnet from modules/network) - runs the citrix-image-rotation.yml workflow's Terraform/Packer steps against resources in this private subnet"
   type        = string
 }
 
@@ -52,4 +52,22 @@ variable "enable_temporary_public_access" {
   description = "Whether to attach a temporary public IP to the runner VM's NIC, for one-time SSH registration in a subscription with no other connectivity path (Bastion/VPN/jump host) - see bootstrap-github-runner-commands.txt. Requires a matching NSG allow rule (modules/network's admin_ssh_source_cidr)."
   type        = bool
   default     = false
+}
+
+variable "enable_scheduled_shutdown" {
+  description = "Whether to attach Azure's native auto-shutdown schedule to this VM - this is a demo environment, on by default so it can't be left running (and costing money) by accident"
+  type        = bool
+  default     = true
+}
+
+variable "scheduled_shutdown_time" {
+  description = "Daily auto-shutdown time, 24-hour \"HHmm\" (e.g. \"1900\" for 7:00 PM)"
+  type        = string
+  default     = "1900"
+}
+
+variable "scheduled_shutdown_timezone" {
+  description = "Windows time zone ID (e.g. \"Eastern Standard Time\") the auto-shutdown schedule runs in"
+  type        = string
+  default     = "Eastern Standard Time"
 }

@@ -132,7 +132,7 @@ resource "citrix_machine_catalog" "vda" {
   provisioning_scheme = {
     hypervisor               = citrix_azure_hypervisor.this.id
     hypervisor_resource_pool = citrix_azure_hypervisor_resource_pool.this.id
-    identity_type            = "AzureAD"
+    identity_type            = "ActiveDirectory"
     number_of_total_machines = each.value.total_machines
 
     machine_account_creation_rules = {
@@ -140,8 +140,21 @@ resource "citrix_machine_catalog" "vda" {
       naming_scheme_type = "Numeric"
     }
 
-    # Required when identity_type = "AzureAD" - Azure AD-joined machines need
-    # an explicit NIC-to-subnet mapping.
+    # Required for identity_type = "ActiveDirectory" - the domain, target OU
+    # for computer accounts, and the service account MCS uses to create/
+    # manage them (created by modules/domain-controllers; added to Domain
+    # Admins there as a deliberate demo-only simplification over Citrix's
+    # documented least-privilege OU delegation - see that module's README).
+    machine_domain_identity = {
+      domain                   = var.active_directory_domain_fqdn
+      domain_ou                = var.active_directory_vda_ou_dn
+      service_account          = var.active_directory_service_account_name
+      service_account_password = var.active_directory_service_account_password
+    }
+
+    # Optional for identity_type = "ActiveDirectory" (MCS falls back to a
+    # single NIC on the resource pool's default network if omitted) - kept
+    # explicit anyway since it's already correct and harmless.
     network_mapping = [
       {
         network        = var.subnets[0]
@@ -161,27 +174,11 @@ resource "citrix_machine_catalog" "vda" {
       # environments/rotation generations' VDA resources never cross over.
       vda_resource_group = azurerm_resource_group.vda[each.key].name
 
-      # Required when identity_type = "AzureAD" - a Template Spec Citrix uses
-      # to derive machine defaults (size, boot diagnostics, OS disk caching,
-      # accelerated networking). Must be a Template Spec, not a VM reference
-      # - a VM-based machine_profile fails validation with a confusing
-      # "machine_profile cannot be specified when using prepared image
-      # without a machine profile" error (citrix/terraform-provider-citrix
-      # v1.0.38). See modules/citrix/README.md for how the template spec is
-      # created and what it must (and must not) contain.
-      machine_profile = {
-        machine_profile_template_spec_name    = var.machine_profile_template_spec_name
-        machine_profile_template_spec_version = var.machine_profile_template_spec_version
-        machine_profile_resource_group        = var.machine_profile_resource_group_name
-      }
-
-      # Deliberately azure_master_image (direct gallery/definition/version
-      # reference), not prepared_image (which references citrix_image_version
-      # above by ID) - prepared_image + machine_profile + identity_type
-      # "AzureAD" hits the same validation error mentioned above regardless
-      # of machine_profile's form. citrix_image_version above still gets
-      # created for Citrix Cloud's Image Management visibility/tracking, it's
-      # just not what the machine catalog itself references.
+      # No machine_profile here - that's only required when identity_type
+      # is "AzureAD" (or provisioning_type is "PVSStreaming", not
+      # applicable here), confirmed against the citrix/citrix provider's
+      # schema. Dropping it also drops the out-of-band Template Spec
+      # creation step (az ts create) this repo previously required.
       azure_master_image = {
         resource_group = var.image_gallery_resource_group_name
         gallery_image = {

@@ -151,7 +151,7 @@ variable "delivery_groups" {
   type = map(object({
     name                                 = string       # Citrix delivery group name
     published_desktop_name               = string       # display name of the published desktop shown to end users in Citrix Workspace
-    desktop_restricted_access_allow_list = list(string) # users/groups allowed to see the published desktop, in Citrix's format ("OID:/azuread/<object_id>" for an Entra ID group, "user@domain.com" for a UPN, etc.) - required for this Entra ID-joined (no traditional AD) environment since there's no SID/SAM-account-name form available
+    desktop_restricted_access_allow_list = list(string) # users/groups allowed to see the published desktop, in traditional AD form ("<NETBIOS>\<GroupName>", e.g. "DRIFTWOOD\Driftwood Dev Desktop Users" - the AD groups modules/domain-controllers creates)
     autoscale_enabled                    = bool
     autoscale_timezone                   = string # Windows time zone ID (e.g. "Eastern Standard Time") the delivery group's autoscale power time schemes run in
     power_time_schemes = list(object({
@@ -169,18 +169,30 @@ variable "delivery_groups" {
   }))
 }
 
-variable "machine_profile_template_spec_name" {
-  description = "Name of the Azure Template Spec Citrix uses to derive machine defaults (size, tags, accelerated networking, AZ) for AzureAD-identity catalogs with a prepared_image - see modules/citrix/README.md for how it's created"
+# --- Active Directory (identity_type = "ActiveDirectory" machine catalogs) ---
+# No machine_profile/Template Spec here - that's only required for AzureAD
+# identity (or PVSStreaming), not applicable to this AD-domain-joined
+# design. See modules/domain-controllers for where the domain/service
+# account are actually created.
+
+variable "active_directory_domain_fqdn" {
+  description = "FQDN of the AD domain VDAs are joined to (e.g. \"driftwood.local\")"
   type        = string
 }
 
-variable "machine_profile_template_spec_version" {
-  description = "Version of the machine profile Template Spec to use"
+variable "active_directory_vda_ou_dn" {
+  description = "Distinguished name of the OU VDA computer accounts are created into (e.g. \"OU=VDAs,OU=Driftwood,DC=driftwood,DC=local\")"
   type        = string
 }
 
-variable "machine_profile_resource_group_name" {
-  description = "Resource group of the machine profile Template Spec"
+variable "active_directory_service_account_name" {
+  description = "SAM account name of the domain service account MCS uses to create/manage VDA computer accounts (created by modules/domain-controllers)"
   type        = string
+}
+
+variable "active_directory_service_account_password" {
+  description = "Password for var.active_directory_service_account_name"
+  type        = string
+  sensitive   = true
 }
 

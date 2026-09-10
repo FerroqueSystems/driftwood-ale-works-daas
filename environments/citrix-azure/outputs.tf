@@ -60,6 +60,26 @@ output "citrix_delivery_group_ids" {
   value       = module.citrix.delivery_group_ids
 }
 
+output "domain_controller_vm_names" {
+  description = "Names of the two domain controller VMs"
+  value       = module.domain_controllers.vm_names
+}
+
+output "domain_controller_private_ips" {
+  description = "Static private IP addresses of the two domain controllers, in creation order [dc-0, dc-1]"
+  value       = module.domain_controllers.dc_private_ips
+}
+
+output "cloud_connector_vm_names" {
+  description = "Names of the Cloud Connector VMs"
+  value       = module.cloud_connectors.vm_names
+}
+
+output "cloud_connector_private_ip_addresses" {
+  description = "Private IP addresses of the Cloud Connector VMs, in the same order as cloud_connector_vm_names"
+  value       = module.cloud_connectors.private_ip_addresses
+}
+
 output "github_runner_vm_name" {
   description = "Name of the self-hosted GitHub Actions runner VM"
   value       = module.github_runner.vm_name

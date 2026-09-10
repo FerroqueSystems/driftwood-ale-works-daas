@@ -46,10 +46,10 @@ citrix_optimizer_template_name = "Citrix_Windows_11_2009.xml"
 prepare_for_citrix_mcs = true
 
 # Optional local admin account baked into the image for break-glass Bastion
-# RDP access (AzureAD-joined VDAs otherwise rely solely on Entra ID native
-# RDP over Bastion - see modules/citrix/README.md). Leave username empty to
-# skip creating one. local_admin_password is sensitive - set via a CI
-# secret / environment variable in practice, never commit a real value.
+# RDP access, useful if the AD domain itself is unreachable (see
+# modules/citrix/README.md). Leave username empty to skip creating one.
+# local_admin_password is sensitive - set via a CI secret / environment
+# variable in practice, never commit a real value.
 local_admin_username = ""
 local_admin_password = ""
 

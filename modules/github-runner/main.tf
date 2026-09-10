@@ -69,3 +69,23 @@ resource "azurerm_linux_virtual_machine" "runner" {
     version   = "latest"
   }
 }
+
+# This is a temporary demo environment - auto-shutdown is on by default so
+# a forgotten VM doesn't rack up cost after everyone's gone home. Azure's
+# native "Auto-shutdown" feature, not a custom script. Note: citrix-image-
+# rotation.yml needs this runner powered on to do anything - if it's been
+# auto-shutdown, start it first (see scripts/manage-demo-vms.ps1) before
+# triggering that workflow.
+resource "azurerm_dev_test_global_vm_shutdown_schedule" "runner" {
+  count = var.enable_scheduled_shutdown ? 1 : 0
+
+  virtual_machine_id    = azurerm_linux_virtual_machine.runner.id
+  location              = var.location
+  enabled               = true
+  daily_recurrence_time = var.scheduled_shutdown_time
+  timezone              = var.scheduled_shutdown_timezone
+
+  notification_settings {
+    enabled = false
+  }
+}

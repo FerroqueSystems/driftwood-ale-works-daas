@@ -17,6 +17,32 @@ variable "tags" {
   default     = {}
 }
 
+# --- Scheduled shutdown (this is a temporary demo environment, torn down
+# after the conference - see README.md) - applies to every VM Terraform
+# directly manages (domain controllers, Cloud Connectors, the GitHub
+# runner). Does NOT cover Citrix MCS-provisioned VDAs, which have no static
+# Terraform-managed VM resource to attach this to - those are governed by
+# each delivery group's own autoscale power_time_schemes instead (see
+# terraform.tfvars.example's delivery_groups block). ---
+
+variable "enable_scheduled_shutdown" {
+  description = "Whether to attach Azure's native auto-shutdown schedule to every Terraform-managed VM"
+  type        = bool
+  default     = true
+}
+
+variable "scheduled_shutdown_time" {
+  description = "Daily auto-shutdown time, 24-hour \"HHmm\" (e.g. \"1900\" for 7:00 PM)"
+  type        = string
+  default     = "1900"
+}
+
+variable "scheduled_shutdown_timezone" {
+  description = "Windows time zone ID the auto-shutdown schedule runs in"
+  type        = string
+  default     = "Eastern Standard Time"
+}
+
 # --- Networking ---
 
 variable "vnet_name" {
@@ -147,16 +173,134 @@ variable "citrix_vda_storage_type" {
   default     = "StandardSSD_LRS"
 }
 
-# --- Machine profile (required for AzureAD-identity catalogs, see modules/citrix/README.md) ---
+# --- Active Directory (modules/domain-controllers, modules/cloud-connectors,
+# modules/citrix) - replaced the earlier Entra ID-joined/no-AD design after
+# real device-join issues in production with no time to chase down before a
+# deadline. See modules/domain-controllers/README.md for exactly what gets
+# created and the (real, documented) risk of automating AD forest creation
+# end-to-end. ---
 
-variable "machine_profile_template_spec_name" {
-  description = "Name of the Azure Template Spec used as the Citrix machine profile - created out-of-band via az CLI, not Terraform-managed"
+variable "active_directory_domain_fqdn" {
+  description = "FQDN of the new AD DS forest/domain to create (e.g. \"driftwood.local\")"
+  type        = string
+  default     = "driftwood.local"
+}
+
+variable "active_directory_domain_netbios_name" {
+  description = "NetBIOS name of the new AD DS forest/domain (e.g. \"DRIFTWOOD\")"
+  type        = string
+  default     = "DRIFTWOOD"
+}
+
+variable "active_directory_safe_mode_password" {
+  description = "DSRM (Directory Services Restore Mode) safe mode administrator password for both domain controllers"
+  type        = string
+  sensitive   = true
+}
+
+variable "active_directory_service_account_name" {
+  description = "SAM account name of the domain service account created for MCS provisioning and Cloud Connector domain join - added to Domain Admins for simplicity, a deliberate demo-only shortcut (see modules/domain-controllers/README.md), not production practice"
+  type        = string
+  default     = "svc-mcs"
+}
+
+variable "active_directory_service_account_password" {
+  description = "Password for the service account named by var.active_directory_service_account_name"
+  type        = string
+  sensitive   = true
+}
+
+variable "active_directory_base_ou_name" {
+  description = "Name of the top-level OU created under the domain root"
+  type        = string
+  default     = "Driftwood"
+}
+
+variable "active_directory_vda_ou_name" {
+  description = "Name of the VDA computer-account OU created under the base OU"
+  type        = string
+  default     = "VDAs"
+}
+
+variable "active_directory_connector_ou_name" {
+  description = "Name of the Cloud Connector computer-account OU created under the base OU"
+  type        = string
+  default     = "Cloud Connectors"
+}
+
+variable "active_directory_dev_desktop_group_name" {
+  description = "Name of the AD security group created for the Dev delivery group's desktop access list"
+  type        = string
+  default     = "Driftwood Dev Desktop Users"
+}
+
+variable "active_directory_test_desktop_group_name" {
+  description = "Name of the AD security group created for the Test/QA delivery group's desktop access list"
+  type        = string
+  default     = "Driftwood QA Desktop Users"
+}
+
+variable "active_directory_prod_desktop_group_name" {
+  description = "Name of the AD security group created for the Prod delivery group's desktop access list"
+  type        = string
+  default     = "Driftwood Prod Desktop Users"
+}
+
+# --- Domain controllers (modules/domain-controllers) ---
+
+variable "domain_controller_admin_username" {
+  description = "Local administrator username for the domain controller VMs"
+  type        = string
+  default     = "dcadmin"
+}
+
+variable "domain_controller_admin_password" {
+  description = "Local administrator password for the domain controller VMs"
+  type        = string
+  sensitive   = true
+}
+
+variable "domain_controller_scripts_storage_account_name" {
+  description = "Globally-unique name for the storage account hosting the domain controllers' own bootstrap scripts (non-secret, publicly-readable by blob URL) - lowercase letters/numbers only, 3-24 characters"
+  type        = string
+  default     = "driftwooddcscripts"
+}
+
+# --- Cloud Connectors (modules/cloud-connectors) ---
+
+variable "cloud_connector_admin_username" {
+  description = "Local administrator username for the Cloud Connector VMs"
+  type        = string
+  default     = "ctxadmin"
+}
+
+variable "cloud_connector_admin_password" {
+  description = "Local administrator password for the Cloud Connector VMs"
+  type        = string
+  sensitive   = true
+}
+
+variable "cloud_connector_client_id" {
+  description = "Citrix Cloud API client ID dedicated to Cloud Connector registration - deliberately separate from citrix_client_id (the Terraform provider's own), so rotating one doesn't couple to the other"
   type        = string
 }
 
-variable "machine_profile_template_spec_version" {
-  description = "Version of the machine profile Template Spec to use"
+variable "cloud_connector_client_secret" {
+  description = "Secret for var.cloud_connector_client_id"
   type        = string
+  sensitive   = true
+}
+
+variable "cloud_connector_installer_url" {
+  description = "Read-only SAS URL to the Cloud Connector installer (CWCConnector.exe), operator-uploaded to the artifact-storage blob container - see modules/cloud-connectors/README.md for the upload workflow"
+  type        = string
+  sensitive   = true
+}
+
+variable "cloud_connector_scripts_storage_account_name" {
+  description = "Globally-unique name for the storage account hosting the Cloud Connectors' own bootstrap scripts (non-secret, publicly-readable by blob URL) - lowercase letters/numbers only, 3-24 characters"
+  type        = string
+  default     = "driftwoodccscripts"
 }
 
 # --- Self-hosted GitHub Actions runner (for citrix-image-rotation.yml) ---

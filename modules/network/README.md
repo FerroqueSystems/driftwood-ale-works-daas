@@ -1,18 +1,18 @@
 # Network Module
 
 Azure virtual network and subnet for the Citrix resource location - hosts the
-Cloud Connectors and VDAs.
+domain controllers, Cloud Connectors, and VDAs.
 
 No NetScaler ADC or inbound gateway rules are provisioned here: session traffic
 is brokered by the Citrix Cloud Gateway service, so the subnet's NSG only needs
-to allow outbound access to Citrix Cloud and Azure.
+to allow outbound access to Citrix Cloud and Azure (plus the temporary SSH
+rule below).
 
 A NAT Gateway is attached to the subnet to provide that outbound path
 explicitly. Azure no longer grants new deployments implicit "default outbound
-access" - without an explicit NAT Gateway (or public IP/load balancer), Cloud
-Connectors and VDAs have no route to the internet at all, which breaks VM
-extensions (e.g. `ConfigureRemotingForAnsible` in
-[modules/cloud-connectors](../cloud-connectors/README.md)), Windows Update, and
+access" - without an explicit NAT Gateway (or public IP/load balancer),
+domain controllers, Cloud Connectors, and VDAs have no route to the internet
+at all, which breaks Custom Script Extension downloads, Windows Update, and
 Citrix Cloud connectivity. See
 [Default outbound access in Azure](https://learn.microsoft.com/azure/virtual-network/ip-services/default-outbound-access).
 

@@ -4,6 +4,17 @@ resource "azurerm_virtual_network" "this" {
   location            = var.location
   address_space       = var.vnet_address_space
   tags                = var.tags
+
+  # Points at the two domain controllers (modules/domain-controllers) once
+  # var.dns_servers is set - the only mechanism Citrix MCS-provisioned VDA
+  # NICs can pick up AD domain DNS through (no per-catalog DNS override
+  # exists in the citrix/citrix provider). Domain controllers themselves
+  # don't depend on this: dc-0 self-reconfigures via Install-ADDSForest
+  # -InstallDns, dc-1 and Cloud Connectors get an explicit NIC-level
+  # override instead (see those modules) - so there's no circular
+  # dependency even though this list's values come from resources created
+  # after this vnet.
+  dns_servers = length(var.dns_servers) > 0 ? var.dns_servers : null
 }
 
 resource "azurerm_subnet" "vda" {
@@ -59,10 +70,10 @@ resource "azurerm_network_security_rule" "runner_temp_ssh" {
 }
 
 # Explicit outbound internet path for the subnet. Azure no longer grants new
-# deployments implicit "default outbound access" - without this, Cloud
-# Connectors and VDAs have no route out at all, which breaks anything that
-# needs it (VM extensions like ConfigureRemotingForAnsible, Windows Update,
-# Citrix Cloud connectivity). See
+# deployments implicit "default outbound access" - without this, domain
+# controllers, Cloud Connectors, and VDAs have no route out at all, which
+# breaks anything that needs it (Custom Script Extension downloads, Windows
+# Update, Citrix Cloud connectivity). See
 # https://learn.microsoft.com/azure/virtual-network/ip-services/default-outbound-access.
 resource "azurerm_public_ip" "nat" {
   name                = "${var.vnet_name}-nat-pip"

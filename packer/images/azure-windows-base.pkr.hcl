@@ -158,8 +158,9 @@ variable "prepare_for_citrix_mcs" {
 }
 
 # Optional local admin account baked into the image for break-glass Bastion
-# RDP access - AzureAD-joined VDAs (see modules/citrix/README.md) otherwise
-# rely solely on Entra ID native RDP over Bastion, with no local fallback.
+# RDP access - useful even on these AD-domain-joined VDAs (see
+# modules/citrix/README.md) as a fallback if the domain is unreachable
+# (DNS/Cloud Connector issues, etc.) and domain credentials won't work.
 # Leave local_admin_username empty to skip creating one.
 variable "local_admin_username" {
   type    = string

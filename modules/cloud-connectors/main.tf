@@ -1,20 +1,70 @@
-# Citrix Cloud Connector VMs for the Azure resource location. Cloud Connectors
-# broker communication between Citrix Cloud and this Azure subscription (the
-# hypervisor connection, AD/Entra ID, and VDA registration) - see
+# Citrix Cloud Connector VMs for the Azure resource location. Cloud
+# Connectors broker communication between Citrix Cloud and this Azure
+# subscription/on-prem AD domain (the hypervisor connection, domain-joined
+# VDA registration and brokering) - see
 # https://community.citrix.com/tech-zone/automation/automation-handbook-2601-part5/
 #
-# These VMs are provisioned here; the Cloud Connector software itself is
-# installed/registered by the Ansible playbook in ../../ansible (run from the
-# self-hosted GitHub Actions runner in ../github-runner, since it needs
-# network line-of-sight to this private subnet).
+# Domain-joined (traditional AD, not Entra ID) via the standard Azure
+# JsonADDomainExtension, then the Cloud Connector software itself is
+# installed/registered by a Custom Script Extension - see
+# scripts/install-cloud-connector.ps1. Both wait behind
+# scripts/wait-for-domain.ps1, since modules/domain-controllers' own
+# extensions report success before their post-promotion reboots even
+# complete - a real race without an explicit wait here.
+
+locals {
+  connector_indices = toset([for i in range(var.connector_count) : tostring(i)])
+}
+
+# Hosts this module's own bootstrap scripts (wait-for-domain.ps1,
+# install-cloud-connector.ps1) - generic, parameterized automation code with
+# no secrets baked into the file content (secrets are passed as extension
+# arguments instead), so public blob read access is fine here. The actual
+# Cloud Connector installer (a Citrix-licensed binary, see
+# var.cloud_connector_installer_url) is NOT hosted here - that one is
+# operator-uploaded to the private artifact-storage container instead, see
+# this module's README.
+resource "azurerm_storage_account" "scripts" {
+  name                            = var.scripts_storage_account_name
+  resource_group_name             = var.resource_group_name
+  location                        = var.location
+  account_tier                    = "Standard"
+  account_replication_type        = "LRS"
+  min_tls_version                 = "TLS1_2"
+  allow_nested_items_to_be_public = true
+  tags                            = var.tags
+}
+
+resource "azurerm_storage_container" "scripts" {
+  name                  = "bootstrap-scripts"
+  storage_account_id    = azurerm_storage_account.scripts.id
+  container_access_type = "blob"
+}
+
+resource "azurerm_storage_blob" "wait_for_domain" {
+  name                 = "wait-for-domain.ps1"
+  storage_container_id = azurerm_storage_container.scripts.id
+  type                 = "Block"
+  source               = "${path.module}/scripts/wait-for-domain.ps1"
+  content_md5          = filemd5("${path.module}/scripts/wait-for-domain.ps1")
+}
+
+resource "azurerm_storage_blob" "install_cloud_connector" {
+  name                 = "install-cloud-connector.ps1"
+  storage_container_id = azurerm_storage_container.scripts.id
+  type                 = "Block"
+  source               = "${path.module}/scripts/install-cloud-connector.ps1"
+  content_md5          = filemd5("${path.module}/scripts/install-cloud-connector.ps1")
+}
 
 resource "azurerm_network_interface" "connector" {
-  for_each = toset([for i in range(var.connector_count) : tostring(i)])
+  for_each = local.connector_indices
 
   name                = "${var.name_prefix}-${each.key}-nic"
   resource_group_name = var.resource_group_name
   location            = var.location
   tags                = var.tags
+  dns_servers         = var.dns_servers
 
   ip_configuration {
     name                          = "internal"
@@ -24,7 +74,7 @@ resource "azurerm_network_interface" "connector" {
 }
 
 resource "azurerm_windows_virtual_machine" "connector" {
-  for_each = toset([for i in range(var.connector_count) : tostring(i)])
+  for_each = local.connector_indices
 
   name                = "${var.name_prefix}-${each.key}"
   resource_group_name = var.resource_group_name
@@ -50,50 +100,93 @@ resource "azurerm_windows_virtual_machine" "connector" {
   }
 }
 
-# Entra ID join, consistent with the AzureAD identity_type used for the VDA
-# machine catalog (see modules/citrix) - no traditional AD domain in this
-# design.
-resource "azurerm_virtual_machine_extension" "aad_login" {
-  for_each = azurerm_windows_virtual_machine.connector
+# This is a temporary demo environment - auto-shutdown is on by default so
+# a forgotten VM doesn't rack up cost after everyone's gone home. Azure's
+# native "Auto-shutdown" feature, not a custom script.
+resource "azurerm_dev_test_global_vm_shutdown_schedule" "connector" {
+  for_each = var.enable_scheduled_shutdown ? azurerm_windows_virtual_machine.connector : {}
 
-  name                       = "AADLoginForWindows"
-  virtual_machine_id         = each.value.id
-  publisher                  = "Microsoft.Azure.ActiveDirectory"
-  type                       = "AADLoginForWindows"
-  type_handler_version       = "2.0"
-  auto_upgrade_minor_version = true
+  virtual_machine_id    = each.value.id
+  location              = var.location
+  enabled               = true
+  daily_recurrence_time = var.scheduled_shutdown_time
+  timezone              = var.scheduled_shutdown_timezone
+
+  notification_settings {
+    enabled = false
+  }
 }
 
-# Enables a WinRM HTTPS listener (self-signed cert) using Ansible's own
-# well-known bootstrap script, so ../../ansible can reach these VMs from the
-# self-hosted runner in ../github-runner. Internal-network-only, no NSG
-# inbound rule opens this up externally (see modules/network).
-#
-# fileUris points at a SAS URL to the vendored copy of the script
-# (../../ansible/files/ConfigureRemotingForAnsible.ps1) staged in the
-# artifact-storage blob container, not a live fetch from GitHub - that avoids
-# a hard runtime dependency on an outside, unpinned third-party URL and on
-# this subnet having outbound internet access at all (see modules/network's
-# NAT Gateway).
-resource "azurerm_virtual_machine_extension" "winrm" {
+resource "azurerm_virtual_machine_extension" "wait_for_domain" {
   for_each = azurerm_windows_virtual_machine.connector
 
-  name                       = "ConfigureRemotingForAnsible"
+  name                       = "WaitForDomain"
   virtual_machine_id         = each.value.id
   publisher                  = "Microsoft.Compute"
   type                       = "CustomScriptExtension"
   type_handler_version       = "1.10"
   auto_upgrade_minor_version = true
 
-  # fileUris carries a SAS token, so it goes in protected_settings (encrypted
-  # at rest, not readable back via the ARM API) rather than plaintext
-  # settings - see https://learn.microsoft.com/azure/virtual-machines/extensions/custom-script-windows#properties.
-  protected_settings = jsonencode({
-    fileUris = [
-      var.winrm_bootstrap_script_url
-    ]
-    commandToExecute = "powershell -ExecutionPolicy Unrestricted -File ConfigureRemotingForAnsible.ps1 -ForceNewSSLCert"
+  settings = jsonencode({
+    fileUris         = [azurerm_storage_blob.wait_for_domain.url]
+    commandToExecute = "powershell -NoProfile -ExecutionPolicy Bypass -File wait-for-domain.ps1 -DomainFqdn '${var.domain_fqdn}' -Dc1PrivateIp '${var.dns_servers[0]}' -Dc2PrivateIp '${var.dns_servers[1]}'"
+  })
+}
+
+resource "azurerm_virtual_machine_extension" "domain_join" {
+  for_each = azurerm_windows_virtual_machine.connector
+
+  name                       = "DomainJoin"
+  virtual_machine_id         = each.value.id
+  publisher                  = "Microsoft.Compute"
+  type                       = "JsonADDomainExtension"
+  type_handler_version       = "1.3"
+  auto_upgrade_minor_version = true
+
+  settings = jsonencode({
+    Name    = var.domain_fqdn
+    OUPath  = var.connector_ou_dn
+    User    = "${var.domain_netbios_name}\\${var.service_account_name}"
+    Restart = true
+    Options = 3
   })
 
-  depends_on = [azurerm_virtual_machine_extension.aad_login]
+  # Password carries the domain service account's credential, so it goes in
+  # protected_settings (encrypted at rest, not readable back via the ARM
+  # API) rather than plaintext settings.
+  protected_settings = jsonencode({
+    Password = var.service_account_password
+  })
+
+  depends_on = [azurerm_virtual_machine_extension.wait_for_domain]
+}
+
+resource "azurerm_virtual_machine_extension" "install_connector" {
+  for_each = azurerm_windows_virtual_machine.connector
+
+  name                       = "InstallCloudConnector"
+  virtual_machine_id         = each.value.id
+  publisher                  = "Microsoft.Compute"
+  type                       = "CustomScriptExtension"
+  type_handler_version       = "1.10"
+  auto_upgrade_minor_version = true
+
+  settings = jsonencode({
+    fileUris = [azurerm_storage_blob.install_cloud_connector.url]
+  })
+
+  # commandToExecute carries the Cloud Connector installer's SAS URL and the
+  # Citrix Cloud API client secret, so it goes in protected_settings.
+  protected_settings = jsonencode({
+    commandToExecute = join(" ", [
+      "powershell -NoProfile -ExecutionPolicy Bypass -File install-cloud-connector.ps1",
+      "-InstallerUrl '${var.cloud_connector_installer_url}'",
+      "-CustomerName '${var.citrix_customer_id}'",
+      "-ClientId '${var.cloud_connector_client_id}'",
+      "-ClientSecret '${var.cloud_connector_client_secret}'",
+      "-ResourceLocationId '${var.citrix_resource_location_id}'",
+    ])
+  })
+
+  depends_on = [azurerm_virtual_machine_extension.domain_join]
 }
