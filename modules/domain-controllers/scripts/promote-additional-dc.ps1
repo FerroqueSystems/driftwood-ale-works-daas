@@ -56,6 +56,19 @@ try {
         throw "Forest/service account did not become ready within 20 minutes."
     }
 
+    # This machine's own NIC still points at Azure's default DNS resolver
+    # (modules/domain-controllers' NIC-level override - needed so its own
+    # bootstrap could resolve the public blob storage endpoint before any DC
+    # existed to ask). Azure's resolver has no idea "driftwood.local" is a
+    # thing, so Install-ADDSDomainController's own DNS-based SRV record
+    # lookup for the domain fails ("could not be contacted") even though the
+    # -Server-targeted Get-ADUser check above just succeeded. Safe to point
+    # at DC1 directly now - the public-DNS bootstrap need is already behind
+    # us at this point in the script.
+    $netAdapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
+    Write-Host "Pointing DNS at $Dc1PrivateIp (via '$($netAdapter.Name)') so domain discovery can actually find $DomainFqdn..."
+    Set-DnsClientServerAddress -InterfaceAlias $netAdapter.Name -ServerAddresses $Dc1PrivateIp
+
     $safeModePw = ConvertTo-SecureString -String $SafeModePassword -AsPlainText -Force
 
     Write-Host "Promoting as an additional domain controller in $DomainFqdn..."
