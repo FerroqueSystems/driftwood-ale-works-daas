@@ -125,7 +125,12 @@ runs:
         : "${PREPARE_FOR_CITRIX_MCS:=true}"
         : "${LOCAL_ADMIN_USERNAME:=}"
         : "${LOCAL_ADMIN_PASSWORD:=}"
-        : "${MANAGED_IMAGE_TAGS_JSON:={\"Environment\":\"demo\",\"Role\":\"golden-image\",\"OS\":\"windows-11\"}}"
+        # Same bash brace-parsing gotcha as write-citrix-tfvars's TAGS_JSON -
+        # a brace-containing default inside ${VAR:=...} gets silently
+        # truncated, so use an explicit if instead.
+        if [ -z "$MANAGED_IMAGE_TAGS_JSON" ]; then
+          MANAGED_IMAGE_TAGS_JSON='{"Environment":"demo","Role":"golden-image","OS":"windows-11"}'
+        fi
 
         jq -n \
           --arg subscription_id "$SUBSCRIPTION_ID" \

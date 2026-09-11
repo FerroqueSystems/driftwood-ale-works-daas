@@ -203,7 +203,11 @@ runs:
         # when the underlying secret/variable doesn't exist yet (which
         # resolves to an empty string, not "omitted") - `:=` fills in the
         # default whenever the value is unset OR empty.
-        : "${TAGS_JSON:={}}"
+        # A brace-containing default can't safely go inside ${VAR:=...} -
+        # bash's own brace-matching inside parameter expansion mis-parses it
+        # (confirmed: ${TAGS_JSON:={}} silently resolves to just "{", not
+        # "{}", breaking jq's --argjson below) - use an explicit if instead.
+        if [ -z "$TAGS_JSON" ]; then TAGS_JSON='{}'; fi
         : "${ENABLE_SCHEDULED_SHUTDOWN:=true}"
         : "${SCHEDULED_SHUTDOWN_TIME:=1900}"
         : "${SCHEDULED_SHUTDOWN_TIMEZONE:=Eastern Standard Time}"
