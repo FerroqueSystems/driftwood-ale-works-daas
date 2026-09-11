@@ -129,7 +129,12 @@ resource "azurerm_virtual_machine_extension" "wait_for_domain" {
 
   settings = jsonencode({
     fileUris         = [azurerm_storage_blob.wait_for_domain.url]
-    commandToExecute = "powershell -NoProfile -ExecutionPolicy Bypass -File wait-for-domain.ps1 -DomainFqdn '${var.domain_fqdn}' -Dc1PrivateIp '${var.dns_servers[0]}' -Dc2PrivateIp '${var.dns_servers[1]}'"
+    # Double-quoted, not single-quoted - cmd.exe (which runs
+    # commandToExecute on Windows) has no concept of single quotes as a
+    # quoting mechanism, unlike PowerShell/bash. See modules/domain-
+    # controllers/main.tf's promote_forest resource for the confirmed
+    # failure this caused there.
+    commandToExecute = "powershell -NoProfile -ExecutionPolicy Bypass -File wait-for-domain.ps1 -DomainFqdn \"${var.domain_fqdn}\" -Dc1PrivateIp \"${var.dns_servers[0]}\" -Dc2PrivateIp \"${var.dns_servers[1]}\""
   })
 }
 
@@ -180,11 +185,11 @@ resource "azurerm_virtual_machine_extension" "install_connector" {
   protected_settings = jsonencode({
     commandToExecute = join(" ", [
       "powershell -NoProfile -ExecutionPolicy Bypass -File install-cloud-connector.ps1",
-      "-InstallerUrl '${var.cloud_connector_installer_url}'",
-      "-CustomerName '${var.citrix_customer_id}'",
-      "-ClientId '${var.cloud_connector_client_id}'",
-      "-ClientSecret '${var.cloud_connector_client_secret}'",
-      "-ResourceLocationId '${var.citrix_resource_location_id}'",
+      "-InstallerUrl \"${var.cloud_connector_installer_url}\"",
+      "-CustomerName \"${var.citrix_customer_id}\"",
+      "-ClientId \"${var.cloud_connector_client_id}\"",
+      "-ClientSecret \"${var.cloud_connector_client_secret}\"",
+      "-ResourceLocationId \"${var.citrix_resource_location_id}\"",
     ])
   })
 

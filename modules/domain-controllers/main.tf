@@ -136,20 +136,30 @@ resource "azurerm_virtual_machine_extension" "promote_forest" {
   # commandToExecute carries the safe mode / service account passwords, so it
   # goes in protected_settings (encrypted at rest, not readable back via the
   # ARM API) rather than plaintext settings.
+  #
+  # Double-quoted, not single-quoted: Windows Custom Script Extension runs
+  # commandToExecute via cmd.exe, which has no concept of single quotes as a
+  # quoting mechanism (unlike PowerShell/bash) - a single-quoted value
+  # containing a space (e.g. the default "Cloud Connectors" connector OU
+  # name, or any of the "Driftwood ... Desktop Users" group names) splits
+  # into multiple positional arguments instead of staying one string,
+  # confirmed by a real apply failing with "A positional parameter cannot be
+  # found that accepts argument 'Connectors'". cmd.exe does honor double
+  # quotes for this.
   protected_settings = jsonencode({
     commandToExecute = join(" ", [
       "powershell -NoProfile -ExecutionPolicy Bypass -File promote-forest.ps1",
-      "-DomainFqdn '${var.domain_fqdn}'",
-      "-DomainNetbiosName '${var.domain_netbios_name}'",
-      "-SafeModePassword '${var.safe_mode_password}'",
-      "-ServiceAccountName '${var.service_account_name}'",
-      "-ServiceAccountPassword '${var.service_account_password}'",
-      "-BaseOuName '${var.base_ou_name}'",
-      "-VdaOuName '${var.vda_ou_name}'",
-      "-ConnectorOuName '${var.connector_ou_name}'",
-      "-DevGroupName '${var.dev_desktop_group_name}'",
-      "-TestGroupName '${var.test_desktop_group_name}'",
-      "-ProdGroupName '${var.prod_desktop_group_name}'",
+      "-DomainFqdn \"${var.domain_fqdn}\"",
+      "-DomainNetbiosName \"${var.domain_netbios_name}\"",
+      "-SafeModePassword \"${var.safe_mode_password}\"",
+      "-ServiceAccountName \"${var.service_account_name}\"",
+      "-ServiceAccountPassword \"${var.service_account_password}\"",
+      "-BaseOuName \"${var.base_ou_name}\"",
+      "-VdaOuName \"${var.vda_ou_name}\"",
+      "-ConnectorOuName \"${var.connector_ou_name}\"",
+      "-DevGroupName \"${var.dev_desktop_group_name}\"",
+      "-TestGroupName \"${var.test_desktop_group_name}\"",
+      "-ProdGroupName \"${var.prod_desktop_group_name}\"",
     ])
   })
 }
@@ -190,12 +200,12 @@ resource "azurerm_virtual_machine_extension" "promote_additional_dc" {
   protected_settings = jsonencode({
     commandToExecute = join(" ", [
       "powershell -NoProfile -ExecutionPolicy Bypass -File promote-additional-dc.ps1",
-      "-DomainFqdn '${var.domain_fqdn}'",
-      "-DomainNetbiosName '${var.domain_netbios_name}'",
-      "-Dc1PrivateIp '${local.dc_private_ips[0]}'",
-      "-SafeModePassword '${var.safe_mode_password}'",
-      "-ServiceAccountName '${var.service_account_name}'",
-      "-ServiceAccountPassword '${var.service_account_password}'",
+      "-DomainFqdn \"${var.domain_fqdn}\"",
+      "-DomainNetbiosName \"${var.domain_netbios_name}\"",
+      "-Dc1PrivateIp \"${local.dc_private_ips[0]}\"",
+      "-SafeModePassword \"${var.safe_mode_password}\"",
+      "-ServiceAccountName \"${var.service_account_name}\"",
+      "-ServiceAccountPassword \"${var.service_account_password}\"",
     ])
   })
 
