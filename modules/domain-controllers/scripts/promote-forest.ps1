@@ -81,8 +81,22 @@ try {
         -NoRebootOnCompletion `
         -Force
 
-    Write-Host "Forest promotion complete. Scheduling a reboot in 90 seconds so this script can report success first; the post-promotion task will finish setup once the DC comes back up."
-    Start-Process -FilePath "shutdown.exe" -ArgumentList "/r", "/t", "90", "/f", "/c", "Rebooting to complete AD DS forest promotion"
+    # A background shutdown.exe (even via Start-Process, even fully detached)
+    # does not reliably survive this script's own process exiting - the
+    # Custom Script Extension agent tears down the whole process tree/job
+    # object once the extension reports completion, silently killing the
+    # pending delayed reboot along with it (confirmed: a real apply reported
+    # this extension as "Succeeded" and exited, but the VM's last boot time
+    # never advanced - the scheduled reboot never actually fired). A one-time
+    # Scheduled Task runs under the Task Scheduler service instead, immune to
+    # the CSE's own process cleanup - same reasoning as the post-promotion
+    # continuation task registered above.
+    Write-Host "Forest promotion complete. Scheduling a reboot in 90 seconds via a one-time task so this script can report success first; the post-promotion task will finish setup once the DC comes back up."
+    $rebootTaskName = "DriftwoodPostForestPromotionReboot"
+    $rebootAction = New-ScheduledTaskAction -Execute "shutdown.exe" -Argument "/r /t 0 /f /c `"Rebooting to complete AD DS forest promotion`""
+    $rebootTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(90)
+    $rebootPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    Register-ScheduledTask -TaskName $rebootTaskName -Action $rebootAction -Trigger $rebootTrigger -Principal $rebootPrincipal -Force | Out-Null
     exit 0
 }
 catch {

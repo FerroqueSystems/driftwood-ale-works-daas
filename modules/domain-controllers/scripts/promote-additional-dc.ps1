@@ -67,8 +67,16 @@ try {
         -NoRebootOnCompletion `
         -Force
 
-    Write-Host "Additional DC promotion complete. Scheduling a reboot in 90 seconds so this script can report success first."
-    Start-Process -FilePath "shutdown.exe" -ArgumentList "/r", "/t", "90", "/f", "/c", "Rebooting to complete AD DS domain controller promotion"
+    # See promote-forest.ps1's identical comment - a background shutdown.exe
+    # does not reliably survive this script's own process exiting under the
+    # Custom Script Extension agent, so this uses a one-time Scheduled Task
+    # instead.
+    Write-Host "Additional DC promotion complete. Scheduling a reboot in 90 seconds via a one-time task so this script can report success first."
+    $rebootTaskName = "DriftwoodAdditionalDcReboot"
+    $rebootAction = New-ScheduledTaskAction -Execute "shutdown.exe" -Argument "/r /t 0 /f /c `"Rebooting to complete AD DS domain controller promotion`""
+    $rebootTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(90)
+    $rebootPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    Register-ScheduledTask -TaskName $rebootTaskName -Action $rebootAction -Trigger $rebootTrigger -Principal $rebootPrincipal -Force | Out-Null
     exit 0
 }
 catch {
