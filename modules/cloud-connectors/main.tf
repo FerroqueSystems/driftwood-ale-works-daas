@@ -133,10 +133,18 @@ resource "azurerm_dev_test_global_vm_shutdown_schedule" "connector" {
 # newer Azure "Run Command" feature, not a VM Extension handler), so it
 # doesn't conflict - same script blob, just invoked a different way, with
 # named parameter blocks instead of a raw commandToExecute string.
+#
+# Named distinctly from the old "WaitForDomain" VM Extension this replaced
+# (not reused) - Run Commands and Extensions apparently share one name
+# namespace per VM, and a real apply hit a 409 Conflict ("already used by
+# another VM extension resource") creating this under the old name even
+# moments after that extension's own deletion had already reported
+# "Destruction complete" - Azure-side propagation lag, not something a
+# retry alone reliably clears. A distinct name sidesteps it outright.
 resource "azurerm_virtual_machine_run_command" "wait_for_domain" {
   for_each = azurerm_windows_virtual_machine.connector
 
-  name               = "WaitForDomain"
+  name               = "WaitForDomainRunCommand"
   location           = var.location
   virtual_machine_id = each.value.id
 
