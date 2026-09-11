@@ -13,6 +13,11 @@ variable "subnet_id" {
   type        = string
 }
 
+variable "private_ip_address" {
+  description = "Static private IP for the runner's NIC in that shared subnet - static (not Dynamic) so it can't race the domain controllers' own static .4/.5 reservations for the same address; Terraform creates independent modules' resources in parallel with no implicit ordering, so Dynamic allocation here isn't guaranteed to happen after the DCs claim theirs"
+  type        = string
+}
+
 variable "name" {
   description = "Name of the runner VM"
   type        = string

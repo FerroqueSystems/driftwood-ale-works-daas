@@ -34,7 +34,8 @@ resource "azurerm_network_interface" "runner" {
   ip_configuration {
     name                          = "internal"
     subnet_id                     = var.subnet_id
-    private_ip_address_allocation = "Dynamic"
+    private_ip_address_allocation = "Static"
+    private_ip_address            = var.private_ip_address
     public_ip_address_id          = var.enable_temporary_public_access ? one(azurerm_public_ip.runner_temp[*].id) : null
   }
 }

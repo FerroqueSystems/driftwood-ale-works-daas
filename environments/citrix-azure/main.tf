@@ -219,6 +219,7 @@ module "github_runner" {
   resource_group_name  = azurerm_resource_group.this.name
   location             = azurerm_resource_group.this.location
   subnet_id            = module.network.vda_subnet_id
+  private_ip_address   = cidrhost(var.vda_subnet_address_prefixes[0], 10)
   name                 = var.github_runner_name
   vm_size              = var.github_runner_vm_size
   admin_username       = var.github_runner_admin_username
