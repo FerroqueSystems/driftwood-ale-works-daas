@@ -162,9 +162,11 @@ Variables tab - not sensitive, but still only relevant to CI):
 | `RESOURCE_GROUP_NAME` | Resource group for the whole environment |
 | `TAGS_JSON` | JSON map of tags applied to Azure resources |
 | `ENABLE_SCHEDULED_SHUTDOWN` / `SCHEDULED_SHUTDOWN_TIME` / `SCHEDULED_SHUTDOWN_TIMEZONE` | Native Azure auto-shutdown schedule applied to every Terraform-managed VM (see "Status / next steps" above) |
+| `ENABLE_BOOT_DIAGNOSTICS` | Console screenshot + serial log on every Terraform-managed VM - on by default while the environment's being stood up/validated, doesn't cover Citrix MCS-provisioned VDAs |
 | `VNET_NAME` / `VNET_ADDRESS_SPACE_JSON` / `VDA_SUBNET_ADDRESS_PREFIXES_JSON` | Networking (JSON-encoded lists for the address-space/prefix values) |
 | `HOSTING_CONNECTION_APP_NAME` | Display name for the Azure AD app registration behind Citrix's hosting connection |
 | `CITRIX_ENVIRONMENT` / `CITRIX_RESOURCE_LOCATION_NAME` / `CITRIX_ZONE_DESCRIPTION` / `CITRIX_HYPERVISOR_NAME` / `CITRIX_RESOURCE_POOL_NAME` | Citrix Cloud environment + DaaS object naming |
+| `CITRIX_ADMIN_FOLDER_NAME` | Citrix Studio/Web Studio admin folder this environment's machine catalogs and delivery groups are placed in, alongside other environments/customers' own folders |
 | `CITRIX_ALLOCATION_TYPE` / `CITRIX_VDA_SERVICE_OFFERING` / `CITRIX_VDA_STORAGE_TYPE` | MCS provisioning settings for VDA machines |
 | `DELIVERY_GROUP_DEV_CONFIG_JSON` / `DELIVERY_GROUP_TEST_CONFIG_JSON` / `DELIVERY_GROUP_PROD_CONFIG_JSON` | One environment's slice of `delivery_groups` each (name, published desktop, access allow-list, autoscale `power_time_schemes`, catalog-naming conventions), as a JSON object matching `terraform.tfvars.example`'s `delivery_groups.dev`/`.test`/`.prod` shape. **All three are read on every job regardless of which single environment it's cutting over** - `write-citrix-tfvars` always reassembles the complete `{dev, test, prod}` map, because Terraform's `for_each` over `delivery_groups` would destroy whichever environments are missing from a partial map |
 | `ACTIVE_DIRECTORY_DOMAIN_FQDN` / `ACTIVE_DIRECTORY_DOMAIN_NETBIOS_NAME` | New AD DS forest/domain identity |

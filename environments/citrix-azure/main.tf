@@ -99,6 +99,7 @@ module "domain_controllers" {
   enable_scheduled_shutdown   = var.enable_scheduled_shutdown
   scheduled_shutdown_time     = var.scheduled_shutdown_time
   scheduled_shutdown_timezone = var.scheduled_shutdown_timezone
+  enable_boot_diagnostics     = var.enable_boot_diagnostics
 }
 
 module "cloud_connectors" {
@@ -127,6 +128,7 @@ module "cloud_connectors" {
   enable_scheduled_shutdown   = var.enable_scheduled_shutdown
   scheduled_shutdown_time     = var.scheduled_shutdown_time
   scheduled_shutdown_timezone = var.scheduled_shutdown_timezone
+  enable_boot_diagnostics     = var.enable_boot_diagnostics
 
   depends_on = [module.domain_controllers]
 }
@@ -163,6 +165,7 @@ module "citrix" {
   source = "../../modules/citrix"
 
   resource_location_name   = var.citrix_resource_location_name
+  admin_folder_name        = var.citrix_admin_folder_name
   zone_description         = var.citrix_zone_description
   hypervisor_name          = var.citrix_hypervisor_name
   subscription_id          = var.azure_subscription_id
@@ -233,4 +236,5 @@ module "github_runner" {
   enable_scheduled_shutdown   = var.enable_scheduled_shutdown
   scheduled_shutdown_time     = var.scheduled_shutdown_time
   scheduled_shutdown_timezone = var.scheduled_shutdown_timezone
+  enable_boot_diagnostics     = var.enable_boot_diagnostics
 }

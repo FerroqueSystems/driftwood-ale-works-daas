@@ -116,6 +116,16 @@ resource "azurerm_windows_virtual_machine" "dc" {
     sku       = "2022-datacenter-azure-edition"
     version   = "latest"
   }
+
+  # On while the environment is still being stood up/validated (console
+  # screenshots + serial log, useful for diagnosing a VM that boots but
+  # never becomes reachable) - Azure-managed storage (storage_account_uri
+  # left unset) rather than a dedicated storage account. Toggle off once
+  # the environment's proven.
+  dynamic "boot_diagnostics" {
+    for_each = var.enable_boot_diagnostics ? [1] : []
+    content {}
+  }
 }
 
 resource "azurerm_virtual_machine_extension" "promote_forest" {

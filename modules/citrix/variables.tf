@@ -3,6 +3,12 @@ variable "resource_location_name" {
   type        = string
 }
 
+variable "admin_folder_name" {
+  description = "Name of the Citrix Studio/Web Studio admin folder this environment's machine catalogs and delivery groups are placed in (alongside other environments/customers' own folders)"
+  type        = string
+  default     = "Driftwood"
+}
+
 variable "zone_description" {
   description = "Description for the Citrix DaaS zone associated with the resource location"
   type        = string

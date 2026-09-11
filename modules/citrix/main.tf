@@ -2,6 +2,15 @@
 # (github.com/citrix/terraform-provider-citrix) as of this writing. The provider
 # evolves quickly - re-check `terraform providers schema -json` after upgrading.
 
+# Groups this environment's machine catalogs and delivery groups under one
+# admin folder in Citrix Studio/Web Studio, matching how other
+# environments/customers already organize theirs (a single folder can hold
+# both object types at once via its `type` set).
+resource "citrix_admin_folder" "this" {
+  name = var.admin_folder_name
+  type = ["ContainsMachineCatalogs", "ContainsDeliveryGroups"]
+}
+
 resource "citrix_cloud_resource_location" "this" {
   name = var.resource_location_name
 }
@@ -122,12 +131,13 @@ resource "citrix_image_version" "vda" {
 resource "citrix_machine_catalog" "vda" {
   for_each = local.flattened_catalogs
 
-  name              = each.value.catalog_name
-  description       = "Golden image build ${each.value.label} (${each.value.env})"
-  zone              = citrix_zone.this.id
-  allocation_type   = var.allocation_type
-  session_support   = var.session_support
-  provisioning_type = "MCS"
+  name                        = each.value.catalog_name
+  description                 = "Golden image build ${each.value.label} (${each.value.env})"
+  zone                        = citrix_zone.this.id
+  allocation_type             = var.allocation_type
+  session_support             = var.session_support
+  provisioning_type           = "MCS"
+  machine_catalog_folder_path = citrix_admin_folder.this.path
 
   provisioning_scheme = {
     hypervisor               = citrix_azure_hypervisor.this.id
@@ -194,7 +204,8 @@ resource "citrix_machine_catalog" "vda" {
 resource "citrix_delivery_group" "vda" {
   for_each = var.delivery_groups
 
-  name = each.value.name
+  name                       = each.value.name
+  delivery_group_folder_path = citrix_admin_folder.this.path
 
   # Citrix rejects machine_count = 0 on *any* entry in
   # associated_machine_catalogs, not just a newly-added one - a catalog being

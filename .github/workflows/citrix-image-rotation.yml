@@ -177,6 +177,7 @@ jobs:
           enable_scheduled_shutdown: ${{ vars.ENABLE_SCHEDULED_SHUTDOWN }}
           scheduled_shutdown_time: ${{ vars.SCHEDULED_SHUTDOWN_TIME }}
           scheduled_shutdown_timezone: ${{ vars.SCHEDULED_SHUTDOWN_TIMEZONE }}
+          enable_boot_diagnostics: ${{ vars.ENABLE_BOOT_DIAGNOSTICS }}
           vnet_name: ${{ vars.VNET_NAME }}
           vnet_address_space_json: ${{ vars.VNET_ADDRESS_SPACE_JSON }}
           vda_subnet_address_prefixes_json: ${{ vars.VDA_SUBNET_ADDRESS_PREFIXES_JSON }}
@@ -187,6 +188,7 @@ jobs:
           citrix_client_id: ${{ secrets.CITRIX_CLIENT_ID }}
           citrix_environment: ${{ vars.CITRIX_ENVIRONMENT }}
           citrix_resource_location_name: ${{ vars.CITRIX_RESOURCE_LOCATION_NAME }}
+          citrix_admin_folder_name: ${{ vars.CITRIX_ADMIN_FOLDER_NAME }}
           citrix_zone_description: ${{ vars.CITRIX_ZONE_DESCRIPTION }}
           citrix_hypervisor_name: ${{ vars.CITRIX_HYPERVISOR_NAME }}
           citrix_resource_pool_name: ${{ vars.CITRIX_RESOURCE_POOL_NAME }}

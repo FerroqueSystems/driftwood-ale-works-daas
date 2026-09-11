@@ -27,6 +27,8 @@ inputs:
     default: ""
   scheduled_shutdown_timezone:
     default: ""
+  enable_boot_diagnostics:
+    default: ""
   vnet_name:
     required: true
   vnet_address_space_json:
@@ -47,6 +49,8 @@ inputs:
     default: ""
   citrix_resource_location_name:
     required: true
+  citrix_admin_folder_name:
+    default: ""
   citrix_zone_description:
     default: ""
   citrix_hypervisor_name:
@@ -144,6 +148,7 @@ runs:
         ENABLE_SCHEDULED_SHUTDOWN: ${{ inputs.enable_scheduled_shutdown }}
         SCHEDULED_SHUTDOWN_TIME: ${{ inputs.scheduled_shutdown_time }}
         SCHEDULED_SHUTDOWN_TIMEZONE: ${{ inputs.scheduled_shutdown_timezone }}
+        ENABLE_BOOT_DIAGNOSTICS: ${{ inputs.enable_boot_diagnostics }}
         VNET_NAME: ${{ inputs.vnet_name }}
         VNET_ADDRESS_SPACE_JSON: ${{ inputs.vnet_address_space_json }}
         VDA_SUBNET_ADDRESS_PREFIXES_JSON: ${{ inputs.vda_subnet_address_prefixes_json }}
@@ -154,6 +159,7 @@ runs:
         CITRIX_CLIENT_ID: ${{ inputs.citrix_client_id }}
         CITRIX_ENVIRONMENT: ${{ inputs.citrix_environment }}
         CITRIX_RESOURCE_LOCATION_NAME: ${{ inputs.citrix_resource_location_name }}
+        CITRIX_ADMIN_FOLDER_NAME: ${{ inputs.citrix_admin_folder_name }}
         CITRIX_ZONE_DESCRIPTION: ${{ inputs.citrix_zone_description }}
         CITRIX_HYPERVISOR_NAME: ${{ inputs.citrix_hypervisor_name }}
         CITRIX_RESOURCE_POOL_NAME: ${{ inputs.citrix_resource_pool_name }}
@@ -211,8 +217,10 @@ runs:
         : "${ENABLE_SCHEDULED_SHUTDOWN:=true}"
         : "${SCHEDULED_SHUTDOWN_TIME:=1900}"
         : "${SCHEDULED_SHUTDOWN_TIMEZONE:=Eastern Standard Time}"
+        : "${ENABLE_BOOT_DIAGNOSTICS:=true}"
         : "${HOSTING_CONNECTION_APP_NAME:=driftwood-citrix-daas-hosting-connection}"
         : "${CITRIX_ENVIRONMENT:=Production}"
+        : "${CITRIX_ADMIN_FOLDER_NAME:=Driftwood}"
         : "${CITRIX_ZONE_DESCRIPTION:=}"
         : "${CITRIX_ALLOCATION_TYPE:=Random}"
         : "${CITRIX_VDA_STORAGE_TYPE:=StandardSSD_LRS}"
@@ -250,6 +258,7 @@ runs:
           --argjson enable_scheduled_shutdown "$ENABLE_SCHEDULED_SHUTDOWN" \
           --arg scheduled_shutdown_time "$SCHEDULED_SHUTDOWN_TIME" \
           --arg scheduled_shutdown_timezone "$SCHEDULED_SHUTDOWN_TIMEZONE" \
+          --argjson enable_boot_diagnostics "$ENABLE_BOOT_DIAGNOSTICS" \
           --arg vnet_name "$VNET_NAME" \
           --argjson vnet_address_space "$VNET_ADDRESS_SPACE_JSON" \
           --argjson vda_subnet_address_prefixes "$VDA_SUBNET_ADDRESS_PREFIXES_JSON" \
@@ -260,6 +269,7 @@ runs:
           --arg citrix_client_id "$CITRIX_CLIENT_ID" \
           --arg citrix_environment "$CITRIX_ENVIRONMENT" \
           --arg citrix_resource_location_name "$CITRIX_RESOURCE_LOCATION_NAME" \
+          --arg citrix_admin_folder_name "$CITRIX_ADMIN_FOLDER_NAME" \
           --arg citrix_zone_description "$CITRIX_ZONE_DESCRIPTION" \
           --arg citrix_hypervisor_name "$CITRIX_HYPERVISOR_NAME" \
           --arg citrix_resource_pool_name "$CITRIX_RESOURCE_POOL_NAME" \
@@ -307,6 +317,7 @@ runs:
             enable_scheduled_shutdown: $enable_scheduled_shutdown,
             scheduled_shutdown_time: $scheduled_shutdown_time,
             scheduled_shutdown_timezone: $scheduled_shutdown_timezone,
+            enable_boot_diagnostics: $enable_boot_diagnostics,
             vnet_name: $vnet_name,
             vnet_address_space: $vnet_address_space,
             vda_subnet_address_prefixes: $vda_subnet_address_prefixes,
@@ -317,6 +328,7 @@ runs:
             citrix_client_id: $citrix_client_id,
             citrix_environment: $citrix_environment,
             citrix_resource_location_name: $citrix_resource_location_name,
+            citrix_admin_folder_name: $citrix_admin_folder_name,
             citrix_zone_description: $citrix_zone_description,
             citrix_hypervisor_name: $citrix_hypervisor_name,
             citrix_resource_pool_name: $citrix_resource_pool_name,

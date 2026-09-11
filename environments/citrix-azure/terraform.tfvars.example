@@ -16,6 +16,12 @@ enable_scheduled_shutdown   = true
 scheduled_shutdown_time     = "1900"
 scheduled_shutdown_timezone = "Eastern Standard Time"
 
+# Console screenshot + serial log on every Terraform-managed VM - useful
+# while the environment's still being stood up/validated. Doesn't cover
+# Citrix MCS-provisioned VDAs (the citrix provider exposes no equivalent
+# setting for those). Safe to flip to false once the environment's proven.
+enable_boot_diagnostics = true
+
 # --- Networking ---
 vnet_name                   = "vnet-driftwood-citrix-daas"
 vnet_address_space          = ["10.50.0.0/16"]
@@ -45,6 +51,10 @@ citrix_environment  = "Production"
 citrix_resource_location_name = "driftwood-azure-eastus"
 citrix_hypervisor_name        = "driftwood-azure-hyperv"
 citrix_resource_pool_name     = "driftwood-azure-resource-pool"
+# Admin folder in Citrix Studio/Web Studio this environment's machine
+# catalogs and delivery groups are placed in, alongside other environments/
+# customers' own folders.
+citrix_admin_folder_name = "Driftwood"
 
 # --- Golden image pipeline (see ../../packer) ---
 gallery_name           = "driftwoodcitrixgallery"

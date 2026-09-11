@@ -129,6 +129,12 @@ variable "enable_scheduled_shutdown" {
   default     = true
 }
 
+variable "enable_boot_diagnostics" {
+  description = "Whether to enable Azure boot diagnostics (console screenshot + serial log) on these VMs - useful while the environment is still being stood up/validated, safe to turn off afterward"
+  type        = bool
+  default     = true
+}
+
 variable "scheduled_shutdown_time" {
   description = "Daily auto-shutdown time, 24-hour \"HHmm\" (e.g. \"1900\" for 7:00 PM)"
   type        = string

@@ -43,6 +43,12 @@ variable "scheduled_shutdown_timezone" {
   default     = "Eastern Standard Time"
 }
 
+variable "enable_boot_diagnostics" {
+  description = "Whether to enable Azure boot diagnostics (console screenshot + serial log) on every Terraform-managed VM (domain controllers, Cloud Connectors, the runner) - useful while the environment is still being stood up/validated, safe to turn off afterward. Doesn't cover Citrix MCS-provisioned VDAs - the citrix provider exposes no equivalent setting for those."
+  type        = bool
+  default     = true
+}
+
 # --- Networking ---
 
 variable "vnet_name" {
@@ -115,6 +121,12 @@ variable "citrix_hypervisor_name" {
 variable "citrix_resource_pool_name" {
   description = "Name of the Citrix hypervisor resource pool"
   type        = string
+}
+
+variable "citrix_admin_folder_name" {
+  description = "Name of the Citrix Studio/Web Studio admin folder this environment's machine catalogs and delivery groups are placed in, alongside other environments/customers' own folders"
+  type        = string
+  default     = "Driftwood"
 }
 
 # --- Golden image versioning / machine catalog rotation ---
