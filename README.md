@@ -170,7 +170,7 @@ Variables tab - not sensitive, but still only relevant to CI):
 | `ACTIVE_DIRECTORY_DEV_DESKTOP_GROUP_NAME` / `ACTIVE_DIRECTORY_TEST_DESKTOP_GROUP_NAME` / `ACTIVE_DIRECTORY_PROD_DESKTOP_GROUP_NAME` | AD security groups referenced by each delivery group's access allow-list |
 | `DOMAIN_CONTROLLER_ADMIN_USERNAME` / `DOMAIN_CONTROLLER_SCRIPTS_STORAGE_ACCOUNT_NAME` | Domain controller VM admin username + their bootstrap-script storage account name |
 | `CLOUD_CONNECTOR_ADMIN_USERNAME` / `CLOUD_CONNECTOR_SCRIPTS_STORAGE_ACCOUNT_NAME` | Cloud Connector VM admin username + their bootstrap-script storage account name |
-| `GITHUB_RUNNER_NAME` / `GITHUB_RUNNER_VM_SIZE` / `GITHUB_RUNNER_ADMIN_USERNAME` | Self-hosted runner VM identity/sizing |
+| `RUNNER_NAME` / `RUNNER_VM_SIZE` / `RUNNER_ADMIN_USERNAME` | Self-hosted runner VM identity/sizing (not `GITHUB_*` - GitHub reserves that prefix for its own automatic secrets/variables and rejects any repo secret/variable name starting with it) |
 | `ENABLE_RUNNER_TEMPORARY_SSH_ACCESS` | Whether the one-time public-IP+NSG SSH path for runner registration is open (leave `false` outside that registration step) |
 | `GALLERY_NAME` / `IMAGE_DEFINITION_NAME` / `IMAGE_SKU` | Shared Image Gallery / VDA image definition naming |
 | `ARTIFACT_STORAGE_ACCOUNT_NAME` / `ARTIFACT_STORAGE_CONTAINER_NAME` | Storage account/container holding Packer build artifacts (VDA installer, Citrix Optimizer zip) |
@@ -197,7 +197,7 @@ Secrets tab):
 | `CLOUD_CONNECTOR_ADMIN_PASSWORD` | Local admin password for the Cloud Connector VMs |
 | `CLOUD_CONNECTOR_CLIENT_ID` / `CLOUD_CONNECTOR_CLIENT_SECRET` | A **second**, dedicated Citrix Cloud API client for Cloud Connector registration - deliberately separate from `CITRIX_CLIENT_ID`/`_SECRET` |
 | `CLOUD_CONNECTOR_INSTALLER_URL` | Read-only SAS URL to the Cloud Connector installer (`CWCConnector.exe`) in artifact storage |
-| `GITHUB_RUNNER_ADMIN_SSH_PUBLIC_KEY` | SSH public key for the self-hosted runner VM's admin user (not secret in principle, kept as a Secret to avoid it sitting in a Variable for no benefit) |
+| `RUNNER_ADMIN_SSH_PUBLIC_KEY` | SSH public key for the self-hosted runner VM's admin user (not secret in principle, kept as a Secret to avoid it sitting in a Variable for no benefit; not `GITHUB_*` for the same reserved-prefix reason as above) |
 | `ADMIN_SOURCE_IP_CIDR` | CIDR allowed to SSH into the runner VM while `ENABLE_RUNNER_TEMPORARY_SSH_ACCESS` is true (only needed during registration) |
 | `VDA_LOCAL_ADMIN_USERNAME` / `VDA_LOCAL_ADMIN_PASSWORD` | Local admin credentials Packer sets on the VDA master image during the build |
 | `CITRIX_VDA_INSTALLER_URL` / `CLOUDPAGING_PLAYER_INSTALLER_URL` / `CITRIX_OPTIMIZER_ZIP_URL` | Read-only SAS URLs to the respective installers/zip in artifact storage |

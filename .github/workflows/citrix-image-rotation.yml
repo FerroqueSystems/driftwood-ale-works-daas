@@ -219,10 +219,10 @@ jobs:
           cloud_connector_client_secret: ${{ secrets.CLOUD_CONNECTOR_CLIENT_SECRET }}
           cloud_connector_installer_url: ${{ secrets.CLOUD_CONNECTOR_INSTALLER_URL }}
           cloud_connector_scripts_storage_account_name: ${{ vars.CLOUD_CONNECTOR_SCRIPTS_STORAGE_ACCOUNT_NAME }}
-          github_runner_name: ${{ vars.GITHUB_RUNNER_NAME }}
-          github_runner_vm_size: ${{ vars.GITHUB_RUNNER_VM_SIZE }}
-          github_runner_admin_username: ${{ vars.GITHUB_RUNNER_ADMIN_USERNAME }}
-          github_runner_admin_ssh_public_key: ${{ secrets.GITHUB_RUNNER_ADMIN_SSH_PUBLIC_KEY }}
+          github_runner_name: ${{ vars.RUNNER_NAME }}
+          github_runner_vm_size: ${{ vars.RUNNER_VM_SIZE }}
+          github_runner_admin_username: ${{ vars.RUNNER_ADMIN_USERNAME }}
+          github_runner_admin_ssh_public_key: ${{ secrets.RUNNER_ADMIN_SSH_PUBLIC_KEY }}
           enable_runner_temporary_ssh_access: ${{ vars.ENABLE_RUNNER_TEMPORARY_SSH_ACCESS }}
           admin_source_ip_cidr: ${{ secrets.ADMIN_SOURCE_IP_CIDR }}
           gallery_name: ${{ vars.GALLERY_NAME }}
