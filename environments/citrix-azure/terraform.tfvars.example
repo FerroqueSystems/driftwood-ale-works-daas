@@ -137,7 +137,7 @@ delivery_groups = {
     power_time_schemes = [
       {
         days_of_week          = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-        display_name          = "Prod weekday business hours (Central)"
+        display_name          = "Prod weekday business hours - Central"
         peak_time_ranges      = ["08:00-17:00"]
         pool_using_percentage = true
         pool_size_schedules = [
