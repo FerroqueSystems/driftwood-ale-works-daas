@@ -76,7 +76,7 @@ resource "azurerm_network_interface" "connector" {
 resource "azurerm_windows_virtual_machine" "connector" {
   for_each = local.connector_indices
 
-  name                = "${var.name_prefix}-${each.key}"
+  name = "${var.name_prefix}-${each.key}"
   # Windows computer_name (the actual guest OS/NetBIOS hostname) is capped at
   # 15 characters, unlike the Azure resource name above - defaulting to the
   # Azure name here fails outright once name_prefix pushes past that limit
@@ -124,25 +124,38 @@ resource "azurerm_dev_test_global_vm_shutdown_schedule" "connector" {
   }
 }
 
-resource "azurerm_virtual_machine_extension" "wait_for_domain" {
+
+# Azure only allows one CustomScriptExtension handler per Windows VM
+# (confirmed by a real apply: adding this as a second azurerm_virtual_
+# machine_extension alongside install_connector below failed with
+# "Multiple VMExtensions per handler not supported for OS type 'Windows'").
+# azurerm_virtual_machine_run_command is a separate mechanism entirely (the
+# newer Azure "Run Command" feature, not a VM Extension handler), so it
+# doesn't conflict - same script blob, just invoked a different way, with
+# named parameter blocks instead of a raw commandToExecute string.
+resource "azurerm_virtual_machine_run_command" "wait_for_domain" {
   for_each = azurerm_windows_virtual_machine.connector
 
-  name                       = "WaitForDomain"
-  virtual_machine_id         = each.value.id
-  publisher                  = "Microsoft.Compute"
-  type                       = "CustomScriptExtension"
-  type_handler_version       = "1.10"
-  auto_upgrade_minor_version = true
+  name               = "WaitForDomain"
+  location           = var.location
+  virtual_machine_id = each.value.id
 
-  settings = jsonencode({
-    fileUris         = [azurerm_storage_blob.wait_for_domain.url]
-    # Double-quoted, not single-quoted - cmd.exe (which runs
-    # commandToExecute on Windows) has no concept of single quotes as a
-    # quoting mechanism, unlike PowerShell/bash. See modules/domain-
-    # controllers/main.tf's promote_forest resource for the confirmed
-    # failure this caused there.
-    commandToExecute = "powershell -NoProfile -ExecutionPolicy Bypass -File wait-for-domain.ps1 -DomainFqdn \"${var.domain_fqdn}\" -Dc1PrivateIp \"${var.dns_servers[0]}\" -Dc2PrivateIp \"${var.dns_servers[1]}\""
-  })
+  source {
+    script_uri = azurerm_storage_blob.wait_for_domain.url
+  }
+
+  parameter {
+    name  = "DomainFqdn"
+    value = var.domain_fqdn
+  }
+  parameter {
+    name  = "Dc1PrivateIp"
+    value = var.dns_servers[0]
+  }
+  parameter {
+    name  = "Dc2PrivateIp"
+    value = var.dns_servers[1]
+  }
 }
 
 resource "azurerm_virtual_machine_extension" "domain_join" {
@@ -170,7 +183,7 @@ resource "azurerm_virtual_machine_extension" "domain_join" {
     Password = var.service_account_password
   })
 
-  depends_on = [azurerm_virtual_machine_extension.wait_for_domain]
+  depends_on = [azurerm_virtual_machine_run_command.wait_for_domain]
 }
 
 resource "azurerm_virtual_machine_extension" "install_connector" {
