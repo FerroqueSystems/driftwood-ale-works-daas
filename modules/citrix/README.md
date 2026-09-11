@@ -55,21 +55,16 @@ see below - a hard block would have just broken iterative dev work).
 once more than 5 distinct labels are outstanding across all three
 environments combined, as a nudge to decommission drained builds.
 
-Two build labeling schemes coexist, both just opaque string keys as far as
-`catalog_rotation` is concerned:
-- **GitFlow-triggered builds** (see below) use `"<branch-slug>-<short-sha>"`
-  (e.g. `"add-widget-a1b2c3d"`).
-- **Manual `workflow_dispatch` builds** still use the original `"YYMM-N"`
-  convention (e.g. `"2607-1"` for the first 2026-07 build).
-
-Either way, the Azure Compute Gallery version is a **separate**, purely
-numeric value recorded alongside the label (`gallery_image_version`) - for
-GitFlow-triggered builds it's `"<YYYYMM>.<run_number>.0"` (computed by the
-workflow, unrelated to the label text); for manual builds it's still derived
-from the "YYMM-N" label itself. `cmd_decommission` in
+Every build label is `"YYMM-N"` (e.g. `"2607-1"` for the first 2026-07
+build), just an opaque string key as far as `catalog_rotation` is
+concerned - supplied as a `workflow_dispatch` input to the manual `build`
+action, since that's the only path that ever creates a new label. The
+Azure Compute Gallery version is a **separate**, purely numeric value
+recorded alongside the label (`gallery_image_version`), derived from it
+(`"YYMM-N"` -> `"YYMM.N.0"`). `cmd_decommission` in
 `rotate_image_versions.py` reads this value back out of the recorded
-rotation state rather than re-deriving it from the label string, since
-branch-slug labels don't encode a version the way "YYMM-N" labels do.
+rotation state rather than re-deriving it from the label string, so it
+stays correct even for an older label predating this convention.
 
 This is driven end-to-end by
 [.github/workflows/citrix-image-rotation.yml](../../.github/workflows/citrix-image-rotation.yml)
@@ -78,16 +73,12 @@ both editing
 [environments/citrix-azure/rotation.auto.tfvars.json](../../environments/citrix-azure/rotation.auto.tfvars.json)
 (the git-tracked source of `var.catalog_rotation`). Two trigger models:
 
-**GitFlow (automatic, `push` triggers)** - the normal path:
-1. Push to any `feature/**`/`release/**`/`hotfix/**` branch -> Packer
-   builds a new golden image and Dev is cut over to it immediately, in one
-   job, no separate approval step in between (`citrix-cutover-approval-dev`
-   can have zero required reviewers configured in repo Settings, making this
-   effectively unattended).
-2. Push to `develop` (a working branch merged in) -> whatever's currently
-   live in Dev (`machine_count > 0` there) is promoted into Test - no new
-   Packer build, just staging + cutover against the already-published image.
-3. Push to `main` (develop merged in) -> same promotion pattern, Test into
+**GitFlow (automatic, `push` triggers)** - promotion only, never a new build:
+1. Push to `develop` (a working branch's approved changes merged in) ->
+   whatever's currently live in Dev (`machine_count > 0` there) is promoted
+   into Test - no new Packer build, just staging + cutover against the
+   already-published image.
+2. Push to `main` (develop merged in) -> same promotion pattern, Test into
    Prod, then the outgoing Prod catalog is drained (maintenance mode ->
    bounded wait for sessions to clear -> power off - see
    `scripts/citrix_daas_maintenance.py`) rather than deleted immediately.
@@ -95,14 +86,17 @@ both editing
    the push starts the job, but it pauses for approval before actually
    cutting Prod over and draining the old catalog.
 
-Because both jobs 1-3 stage (`machine_count = 0`) and cut over
+Dev itself is never pushed into automatically, not even by pushing to a
+`feature/**`/`release/**`/`hotfix/**` branch - building and cutting Dev
+over is always the manual step below, run by hand as many times as needed
+before a change is considered ready to merge into `develop`.
+
+Because both jobs 1-2 stage (`machine_count = 0`) and cut over
 (`machine_count = N`) entirely within the JSON file before Terraform ever
-runs once, a single **untargeted** `terraform apply` is safe for all three -
+runs once, a single **untargeted** `terraform apply` is safe for both -
 there's no observable intermediate state where a delivery group would be
 asked to associate a catalog at `machine_count = 0` (Citrix's actual
-rejection case, see below). This generalizes what used to be a one-time
-"bootstrap a brand-new environment" exception into the normal shape for
-every automated promotion.
+rejection case, see below).
 
 **Manual (`workflow_dispatch`)** - for out-of-band operations (rebuilding
 one environment in isolation, or a deliberate "stage now, cut over later"

@@ -87,10 +87,10 @@ def cmd_decommission(args, data):
         )
     removed = env_versions.pop(args.label)
     # The workflow needs this to delete the underlying Azure Compute Gallery
-    # image version - previously re-derived from the label string itself
-    # ("YYMM-N" -> "YYMM.N.0"), which breaks now that labels are branch-slug
-    # based and no longer encode a derivable version. Read it back from the
-    # rotation state instead, which has always recorded it authoritatively.
+    # image version - read from the rotation state (which has always
+    # recorded it authoritatively) rather than re-derived from the label
+    # string, so this stays correct even for any older label that predates
+    # the current "YYMM-N" convention.
     write_github_output({"gallery_image_version": removed["gallery_image_version"]})
 
 

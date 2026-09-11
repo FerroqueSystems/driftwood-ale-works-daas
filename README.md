@@ -37,13 +37,14 @@ deployment on Azure, built following the
 - **Golden image pipeline**: Packer builds the Windows VDA master image and
   publishes it to an Azure Shared Image Gallery, which the machine catalog
   references.
-- **GitFlow-driven rotation**: push to `feature/**`/`release/**`/`hotfix/**`
-  builds a new image and cuts Dev over to it automatically; merging into
-  `develop` promotes it to Test; merging into `main` promotes it to Prod and
+- **GitFlow-driven rotation**: Dev is always manual - build a new image and
+  cut Dev over to it by hand (`workflow_dispatch`), as many times as needed
+  before merging anywhere; merging into `develop` promotes whatever's live
+  in Dev to Test automatically; merging into `main` promotes it to Prod and
   drains the outgoing catalog (maintenance mode -> bounded wait -> power
-  off, not deleted). Manual `workflow_dispatch` actions remain for
-  out-of-band operations and for actually decommissioning a drained catalog.
-  See [modules/citrix's rotation section](modules/citrix/README.md#image-catalog-rotation-per-environment)
+  off, not deleted). Manual `workflow_dispatch` actions also remain for
+  other out-of-band operations and for actually decommissioning a drained
+  catalog. See [modules/citrix's rotation section](modules/citrix/README.md#image-catalog-rotation-per-environment)
   for the full model.
 
 ## Layout
@@ -137,10 +138,11 @@ Remote PC / app publishing beyond desktops aren't in scope yet.
 
 ## GitHub repo secrets/variables
 
-Configure these under repo Settings before pushing to `feature/**`/
-`release/**`/`hotfix/**`/`develop`/`main`, or running
-`citrix-image-rotation.yml` manually. `terraform.yml` and `packer.yml`'s
-existing `fmt`/`validate`-only jobs need none of these.
+Configure these under repo Settings before running `citrix-image-rotation.yml`
+manually (`build`/`cutover`/`decommission`/`apply`, on any branch), or before
+pushing to `develop`/`main` (which trigger promotion automatically).
+`terraform.yml` and `packer.yml`'s existing `fmt`/`validate`-only jobs need
+none of these.
 
 Every real config value is its own named GitHub secret or variable -
 `.github/actions/write-citrix-tfvars` and `.github/actions/write-packer-vars`
