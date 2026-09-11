@@ -72,6 +72,17 @@ resource "azurerm_network_interface" "dc" {
   location            = var.location
   tags                = var.tags
 
+  # Explicit override to Azure's own default resolver - NOT unset/null, which
+  # would inherit the VNet-level dns_servers (modules/network points that at
+  # these same two DCs). A DC can't resolve anything, including the public
+  # blob storage endpoint its own promote-forest.ps1 Custom Script Extension
+  # needs to download from, before AD DS/DNS Server has actually been
+  # promoted on it - confirmed by a real apply failing with "DNS name
+  # resolution failed" fetching that script. Everything else in the VNet
+  # (Cloud Connectors, the runner, future VDAs) still resolves through these
+  # DCs once they're up, via the VNet-level setting.
+  dns_servers = ["168.63.129.16"]
+
   ip_configuration {
     name                          = "internal"
     subnet_id                     = var.subnet_id
