@@ -77,6 +77,13 @@ resource "azurerm_windows_virtual_machine" "connector" {
   for_each = local.connector_indices
 
   name                = "${var.name_prefix}-${each.key}"
+  # Windows computer_name (the actual guest OS/NetBIOS hostname) is capped at
+  # 15 characters, unlike the Azure resource name above - defaulting to the
+  # Azure name here fails outright once name_prefix pushes past that limit
+  # (confirmed by a real apply: the default "driftwood-cloud-connector-0/1"
+  # is 27 characters). Short and explicit avoids depending on name_prefix
+  # staying under any particular length.
+  computer_name       = "dw-cc-${each.key}"
   resource_group_name = var.resource_group_name
   location            = var.location
   size                = var.vm_size
