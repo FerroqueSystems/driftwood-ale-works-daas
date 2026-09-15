@@ -107,46 +107,55 @@ jobs:
         working-directory: environments/citrix-azure
         run: terraform init
 
-      # Same OAuth2 client-credentials flow as scripts/citrix_daas_maintenance.py's
-      # get_token(). First attempt used the Terraform provider's own
-      # citrix_client_id/CITRIX_CLIENT_SECRET and got HTTP 403 Forbidden
-      # listing DeliveryGroups - that client's grant apparently doesn't
-      # cover the classic /cvadapis/ DaaS REST API surface. Using
-      # CITRIX_MAINTENANCE_CLIENT_ID/_SECRET instead - the same dedicated
-      # client citrix_daas_maintenance.py already uses successfully against
-      # this exact API family (MachineCatalogs/Machines).
+      # Attempt 3: the legacy /cvadapis/ surface 403'd for both the
+      # Terraform provider's client and the dedicated maintenance client
+      # (attempts 1/2, see git history on this file) - captured browser
+      # DevTools traffic from Web Studio itself shows it actually calls the
+      # modern Orchestration API's DeliveryGroupsV2 resource, reachable
+      # through Citrix Cloud's public gateway at /cvad/manage/ rather than
+      # /cvadapis/. That's the same surface the citrix/citrix Terraform
+      # provider itself talks to, so reverting to citrix_client_id/
+      # CITRIX_CLIENT_SECRET here - it should already be scoped for
+      # whatever the provider needs to read/manage delivery groups.
       - name: Look up the existing delivery group's real Citrix Cloud ID
         id: lookup
         working-directory: environments/citrix-azure
         env:
-          CITRIX_MAINTENANCE_CLIENT_ID: ${{ secrets.CITRIX_MAINTENANCE_CLIENT_ID }}
-          CITRIX_MAINTENANCE_CLIENT_SECRET: ${{ secrets.CITRIX_MAINTENANCE_CLIENT_SECRET }}
+          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
         run: |
           python3 - <<'PYEOF'
           import json
           import os
+          import urllib.error
           import urllib.request
 
           cfg = json.load(open("ci.auto.tfvars.json"))
           customer_id = cfg["citrix_customer_id"]
-          client_id = os.environ["CITRIX_MAINTENANCE_CLIENT_ID"]
-          client_secret = os.environ["CITRIX_MAINTENANCE_CLIENT_SECRET"]
+          client_id = cfg["citrix_client_id"]
+          client_secret = os.environ["CITRIX_CLIENT_SECRET"]
           target_name = "Driftwood Ale Works - Production"
 
-          token_url = f"https://api.cloud.com/cctrustoauth2/{customer_id}/tokens/clients"
-          body = f"grant_type=client_credentials&client_id={client_id}&client_secret={client_secret}".encode("utf-8")
-          req = urllib.request.Request(token_url, data=body, method="POST")
-          req.add_header("Content-Type", "application/x-www-form-urlencoded")
-          with urllib.request.urlopen(req, timeout=30) as resp:
-              token = json.loads(resp.read())["access_token"]
+          def call(method, url, token=None, body=None):
+              data = body.encode("utf-8") if isinstance(body, str) else body
+              req = urllib.request.Request(url, data=data, method=method)
+              if token:
+                  req.add_header("Authorization", f"CwsAuth Bearer={token}")
+                  req.add_header("Citrix-CustomerId", customer_id)
+                  req.add_header("Accept", "application/json")
+              else:
+                  req.add_header("Content-Type", "application/x-www-form-urlencoded")
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return json.loads(resp.read())
+              except urllib.error.HTTPError as e:
+                  detail = e.read().decode("utf-8", errors="replace")
+                  raise SystemExit(f"{method} {url} -> HTTP {e.code}: {detail}")
 
-          list_url = f"https://api.cloud.com/cvadapis/{customer_id}/DeliveryGroups"
-          req = urllib.request.Request(list_url, method="GET")
-          req.add_header("Authorization", f"CwsAuth Bearer={token}")
-          req.add_header("Citrix-CustomerId", customer_id)
-          req.add_header("Accept", "application/json")
-          with urllib.request.urlopen(req, timeout=30) as resp:
-              groups = json.loads(resp.read()).get("Items", [])
+          token_url = f"https://api.cloud.com/cctrustoauth2/{customer_id}/tokens/clients"
+          token = call("POST", token_url, body=f"grant_type=client_credentials&client_id={client_id}&client_secret={client_secret}")["access_token"]
+
+          list_url = f"https://api.cloud.com/cvad/manage/DeliveryGroupsV2?limit=250&fields=Id,Name"
+          groups = call("GET", list_url, token=token).get("Items", [])
 
           print("Delivery groups found:")
           for g in groups:
