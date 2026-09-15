@@ -108,15 +108,19 @@ jobs:
         run: terraform init
 
       # Same OAuth2 client-credentials flow as scripts/citrix_daas_maintenance.py's
-      # get_token() - reuses the Terraform provider's own citrix_client_id/
-      # CITRIX_CLIENT_SECRET (read-only List call, no need for a dedicated
-      # client). DeliveryGroups is the same family of DaaS REST API endpoint
-      # as that script's already-used MachineCatalogs list call.
+      # get_token(). First attempt used the Terraform provider's own
+      # citrix_client_id/CITRIX_CLIENT_SECRET and got HTTP 403 Forbidden
+      # listing DeliveryGroups - that client's grant apparently doesn't
+      # cover the classic /cvadapis/ DaaS REST API surface. Using
+      # CITRIX_MAINTENANCE_CLIENT_ID/_SECRET instead - the same dedicated
+      # client citrix_daas_maintenance.py already uses successfully against
+      # this exact API family (MachineCatalogs/Machines).
       - name: Look up the existing delivery group's real Citrix Cloud ID
         id: lookup
         working-directory: environments/citrix-azure
         env:
-          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+          CITRIX_MAINTENANCE_CLIENT_ID: ${{ secrets.CITRIX_MAINTENANCE_CLIENT_ID }}
+          CITRIX_MAINTENANCE_CLIENT_SECRET: ${{ secrets.CITRIX_MAINTENANCE_CLIENT_SECRET }}
         run: |
           python3 - <<'PYEOF'
           import json
@@ -125,8 +129,8 @@ jobs:
 
           cfg = json.load(open("ci.auto.tfvars.json"))
           customer_id = cfg["citrix_customer_id"]
-          client_id = cfg["citrix_client_id"]
-          client_secret = os.environ["CITRIX_CLIENT_SECRET"]
+          client_id = os.environ["CITRIX_MAINTENANCE_CLIENT_ID"]
+          client_secret = os.environ["CITRIX_MAINTENANCE_CLIENT_SECRET"]
           target_name = "Driftwood Ale Works - Production"
 
           token_url = f"https://api.cloud.com/cctrustoauth2/{customer_id}/tokens/clients"
