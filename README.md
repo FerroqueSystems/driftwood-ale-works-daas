@@ -73,14 +73,23 @@ deployment on Azure, built following the
 - [`modules/github-runner`](modules/github-runner/README.md) - self-hosted
   GitHub Actions runner VM (network access to the private VDA subnet)
 - [`packer`](packer/README.md) - Packer template that builds the VDA master
-  image and publishes it into the image gallery
+  image and publishes it into the image gallery. Injects
+  [`images/files/unattend.xml`](packer/images/files/unattend.xml) before
+  sysprep so machines later created from the published image (including
+  Citrix MCS-provisioned VDAs) skip OOBE's interactive network/Microsoft-
+  account/privacy screens instead of hanging on them - see that file's
+  header comment
 - [`scripts/rotate_image_versions.py`](scripts/rotate_image_versions.py) -
   edits the golden image/machine catalog rotation state
 - [`scripts/manage-demo-vms.ps1`](scripts/manage-demo-vms.ps1) - ad-hoc
   start/stop/status for every VM in this temporary demo environment
   (domain controllers, Cloud Connectors, the runner, and any Citrix
-  MCS-provisioned VDAs) - on top of the auto-shutdown schedule every
-  Terraform-managed VM already has (see
+  MCS-provisioned VDAs) - defaults `-SubscriptionId` from
+  `scripts/manage-demo-vms.env` (gitignored - copy from
+  `manage-demo-vms.env.example`) if present, mirroring the
+  `ARM_SUBSCRIPTION_ID` GitHub secret for local use since GitHub secrets
+  can't be read back by any script/CLI - on top of the auto-shutdown
+  schedule every Terraform-managed VM already has (see
   [environments/citrix-azure](environments/citrix-azure/README.md))
 - `.github/workflows/terraform.yml` - `terraform fmt`/`validate` on PRs
 - `.github/workflows/packer.yml` - `packer fmt`/`validate` on PRs
@@ -162,7 +171,7 @@ Variables tab - not sensitive, but still only relevant to CI):
 | `RESOURCE_GROUP_NAME` | Resource group for the whole environment |
 | `TAGS_JSON` | JSON map of tags applied to Azure resources |
 | `ENABLE_SCHEDULED_SHUTDOWN` / `SCHEDULED_SHUTDOWN_TIME` / `SCHEDULED_SHUTDOWN_TIMEZONE` | Native Azure auto-shutdown schedule applied to every Terraform-managed VM (see "Status / next steps" above) |
-| `ENABLE_BOOT_DIAGNOSTICS` | Console screenshot + serial log on every Terraform-managed VM - on by default while the environment's being stood up/validated, doesn't cover Citrix MCS-provisioned VDAs |
+| `ENABLE_BOOT_DIAGNOSTICS` | Console screenshot + serial log on every Terraform-managed VM - on by default while the environment's being stood up/validated, doesn't cover Citrix MCS-provisioned VDAs or the Packer build VM (see `boot_diag_storage_account`/`ARTIFACT_STORAGE_ACCOUNT_NAME` below, wired through `write-packer-vars`) |
 | `VNET_NAME` / `VNET_ADDRESS_SPACE_JSON` / `VDA_SUBNET_ADDRESS_PREFIXES_JSON` | Networking (JSON-encoded lists for the address-space/prefix values) |
 | `HOSTING_CONNECTION_APP_NAME` | Display name for the Azure AD app registration behind Citrix's hosting connection |
 | `CITRIX_ENVIRONMENT` / `CITRIX_RESOURCE_LOCATION_NAME` / `CITRIX_ZONE_DESCRIPTION` / `CITRIX_HYPERVISOR_NAME` / `CITRIX_RESOURCE_POOL_NAME` | Citrix Cloud environment + DaaS object naming |
@@ -177,7 +186,7 @@ Variables tab - not sensitive, but still only relevant to CI):
 | `RUNNER_NAME` / `RUNNER_VM_SIZE` / `RUNNER_ADMIN_USERNAME` | Self-hosted runner VM identity/sizing (not `GITHUB_*` - GitHub reserves that prefix for its own automatic secrets/variables and rejects any repo secret/variable name starting with it) |
 | `ENABLE_RUNNER_TEMPORARY_SSH_ACCESS` | Whether the one-time public-IP+NSG SSH path for runner registration is open (leave `false` outside that registration step) |
 | `GALLERY_NAME` / `IMAGE_DEFINITION_NAME` / `IMAGE_SKU` | Shared Image Gallery / VDA image definition naming |
-| `ARTIFACT_STORAGE_ACCOUNT_NAME` / `ARTIFACT_STORAGE_CONTAINER_NAME` | Storage account/container holding Packer build artifacts (VDA installer, Citrix Optimizer zip) |
+| `ARTIFACT_STORAGE_ACCOUNT_NAME` / `ARTIFACT_STORAGE_CONTAINER_NAME` | Storage account/container holding Packer build artifacts (VDA installer, Citrix Optimizer zip). `ARTIFACT_STORAGE_ACCOUNT_NAME` is also reused as the Packer build VM's `boot_diag_storage_account` (see `write-packer-vars`) - Packer's `azure-arm` builder has no Azure-managed-storage boot diagnostics option like `azurerm_windows_virtual_machine` does, so it needs an existing storage account name |
 | `DEV_TOTAL_MACHINES` / `TEST_TOTAL_MACHINES` / `PROD_TOTAL_MACHINES` | Machine-catalog size for the automatic push-triggered jobs (default 3/5/20 if unset) |
 | `OUTSTANDING_IMAGE_LABEL_THRESHOLD` | Outstanding-image-count that triggers a (non-blocking) warning (default 5 if unset) |
 | `AZURE_IMGPUBLISHER` / `AZURE_IMGOFFER` / `AZURE_IMGSKU` / `AZURE_IMGVERSION` | Base Azure Marketplace image Packer builds from |

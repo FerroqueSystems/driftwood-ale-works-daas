@@ -13,6 +13,10 @@ Citrix Optimizer, prepares the VM for Citrix MCS capture, and then generalizes i
 - `azure-windows-base.pkr.hcl`: reusable Azure Packer template for Windows builds
 - `win11-azure.pkrvars.hcl.example`: example build variables for Windows 11
   (the only image built right now)
+- `files/unattend.xml`: Windows Setup answer file uploaded to the build VM
+  and passed to sysprep via `/unattend:` - suppresses OOBE's interactive
+  network/Microsoft-account/privacy screens on every machine later created
+  from the published image (see "OOBE" section below)
 - `scripts/windows/install-chocolatey.ps1`: bootstraps Chocolatey on the build VM
 - `scripts/windows/install-chocolatey-packages.ps1`: installs requested Chocolatey packages
 - `scripts/windows/install-desktopinfo.ps1`: copies DesktopInfo from blob storage and registers it to run at user logon
@@ -143,6 +147,39 @@ In CI, these are passed from the `VDA_LOCAL_ADMIN_USERNAME` /
 [.github/workflows/citrix-image-rotation.yml](../../.github/workflows/citrix-image-rotation.yml)),
 kept out of the `PACKER_BUILD_VARS_JSON` bundle the same way
 `CITRIX_CLIENT_SECRET` is kept out of `TERRAFORM_TFVARS_JSON`.
+
+## OOBE
+
+Windows 11 22H2+ shows several interactive OOBE screens on first boot from a
+generalized image - most critically "let's connect you to a network," which
+has no visible skip option and hangs indefinitely without one. This is the
+"OOBE-hang symptom" referenced elsewhere in this repo's history for VDA
+machines provisioned by Citrix MCS from the published golden image.
+
+`files/unattend.xml` fixes this: the `build` block's `file` provisioner
+uploads it to `C:/Windows/Temp/unattend.xml` on the build VM, and
+`scripts/windows/sysprep.ps1` passes it to `Sysprep.exe` via `/unattend:`,
+which is the documented mechanism for persisting an answer file's settings
+across generalize. Its `specialize`-pass command sets the `BypassNRO`
+registry value that skips the network-required screen, and its
+`oobeSystem`-pass settings hide the EULA/OEM-registration/online-account/
+wireless-setup screens. It does not handle domain join or computer naming -
+Citrix MCS's own machine identity service injects those separately per
+machine.
+
+## Boot Diagnostics
+
+`boot_diag_storage_account` (see `win11-azure.pkrvars.hcl.example`) enables
+Azure boot diagnostics (console screenshot + serial log) on the build VM
+itself - useful for diagnosing a build that boots but never becomes
+reachable over WinRM, including an OOBE hang during the build itself (as
+opposed to on a machine created later from the published image, which the
+`unattend.xml` above targets). Unlike `azurerm_windows_virtual_machine`'s
+`boot_diagnostics` block, the `azure-arm` Packer builder has no
+Azure-managed-storage option - it requires the name of a storage account
+that already exists. In CI this reuses `module.artifact_storage`'s account
+(`ARTIFACT_STORAGE_ACCOUNT_NAME`, wired through `write-packer-vars`) rather
+than provisioning a dedicated one. Leave empty to disable.
 
 ## Artifact Storage
 

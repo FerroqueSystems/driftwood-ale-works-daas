@@ -173,6 +173,21 @@ variable "local_admin_password" {
   sensitive = true
 }
 
+# Existing storage account (e.g. module.artifact_storage's - see
+# modules/artifact-storage/README.md) to hold this build VM's boot
+# diagnostics (console screenshot + serial log) - useful for diagnosing a
+# build that boots but never becomes reachable over WinRM, including an
+# OOBE hang during the build itself (as opposed to on a machine created
+# later from the published image, which files/unattend.xml targets - see
+# the "file"/sysprep provisioners below). The azure-arm builder has no
+# Azure-managed-storage option like azurerm_windows_virtual_machine's
+# boot_diagnostics block does - an existing storage account name is
+# required. Leave empty to disable.
+variable "boot_diag_storage_account" {
+  type    = string
+  default = ""
+}
+
 locals {
   shared_image_replication_regions = length(var.shared_image_replication_regions) > 0 ? var.shared_image_replication_regions : [var.location]
 }
@@ -197,6 +212,8 @@ source "azure-arm" "windows" {
   winrm_insecure = true
   winrm_timeout  = var.winrm_timeout
   winrm_username = var.communicator_username
+
+  boot_diag_storage_account = var.boot_diag_storage_account
 
   shared_image_gallery_destination {
     resource_group      = var.gallery_resource_group_name
@@ -324,6 +341,14 @@ build {
   # cover, so sysprep never captures the image mid-change.
   provisioner "windows-restart" {
     restart_timeout = "15m"
+  }
+
+  # Uploaded before sysprep so it's picked up via the /unattend: flag in
+  # sysprep.ps1 - suppresses OOBE's interactive network/Microsoft-account/
+  # privacy screens on every machine later created from this image.
+  provisioner "file" {
+    source      = "${path.root}/files/unattend.xml"
+    destination = "C:/Windows/Temp/unattend.xml"
   }
 
   provisioner "powershell" {

@@ -283,6 +283,7 @@ jobs:
           local_admin_username: ${{ secrets.VDA_LOCAL_ADMIN_USERNAME }}
           local_admin_password: ${{ secrets.VDA_LOCAL_ADMIN_PASSWORD }}
           managed_image_tags_json: ${{ vars.MANAGED_IMAGE_TAGS_JSON }}
+          boot_diag_storage_account: ${{ vars.ARTIFACT_STORAGE_ACCOUNT_NAME }}
 
       # Re-running "build" (e.g. to retry a later step after Packer already
       # succeeded) would otherwise always fail here - Packer refuses to

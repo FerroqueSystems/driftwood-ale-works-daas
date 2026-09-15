@@ -38,7 +38,10 @@
 
 .PARAMETER SubscriptionId
   Optional - switches context to this subscription before doing anything.
-  Defaults to whatever subscription Connect-AzAccount already selected.
+  If not passed, falls back to ARM_SUBSCRIPTION_ID in manage-demo-vms.env
+  (gitignored - copy manage-demo-vms.env.example next to this script and
+  fill in the real value) if that file exists, then to whatever subscription
+  Connect-AzAccount already selected.
 
 .PARAMETER Wait
   If set, blocks until every targeted VM reports the expected power state
@@ -80,6 +83,22 @@ if (-not (Get-AzContext)) {
     throw "Not logged in - run Connect-AzAccount first."
 }
 
+if (-not $SubscriptionId) {
+    $envFilePath = Join-Path $PSScriptRoot "manage-demo-vms.env"
+    if (Test-Path $envFilePath) {
+        $envValues = @{}
+        foreach ($line in Get-Content $envFilePath) {
+            if ($line -match '^\s*#' -or $line -notmatch '=') { continue }
+            $key, $value = $line -split '=', 2
+            $envValues[$key.Trim()] = $value.Trim()
+        }
+        if ($envValues.ContainsKey("ARM_SUBSCRIPTION_ID")) {
+            $SubscriptionId = $envValues["ARM_SUBSCRIPTION_ID"]
+            Write-Host "Using subscription ID from $envFilePath"
+        }
+    }
+}
+
 if ($SubscriptionId) {
     Set-AzContext -SubscriptionId $SubscriptionId | Out-Null
 }
@@ -117,7 +136,11 @@ if (-not $vms -or $vms.Count -eq 0) {
 
 function Get-PowerState {
     param($Vm)
-    ($Vm.Statuses | Where-Object { $_.Code -like "PowerState/*" }).DisplayStatus
+    # Get-AzVM -Status only populates .Statuses (the InstanceView collection)
+    # when querying a single VM by -Name. Listing every VM in a resource
+    # group (no -Name, as done above) instead surfaces power state directly
+    # via .PowerState - .Statuses is empty on those objects.
+    $Vm.PowerState
 }
 
 function Wait-ForPowerState {

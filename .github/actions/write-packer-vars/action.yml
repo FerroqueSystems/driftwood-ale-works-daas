@@ -67,6 +67,8 @@ inputs:
     default: ""
   managed_image_tags_json:
     default: ""
+  boot_diag_storage_account:
+    default: ""
 
 runs:
   using: composite
@@ -102,6 +104,7 @@ runs:
         LOCAL_ADMIN_USERNAME: ${{ inputs.local_admin_username }}
         LOCAL_ADMIN_PASSWORD: ${{ inputs.local_admin_password }}
         MANAGED_IMAGE_TAGS_JSON: ${{ inputs.managed_image_tags_json }}
+        BOOT_DIAG_STORAGE_ACCOUNT: ${{ inputs.boot_diag_storage_account }}
       run: |
         set -euo pipefail
 
@@ -125,6 +128,7 @@ runs:
         : "${PREPARE_FOR_CITRIX_MCS:=true}"
         : "${LOCAL_ADMIN_USERNAME:=}"
         : "${LOCAL_ADMIN_PASSWORD:=}"
+        : "${BOOT_DIAG_STORAGE_ACCOUNT:=}"
         # Same bash brace-parsing gotcha as write-citrix-tfvars's TAGS_JSON -
         # a brace-containing default inside ${VAR:=...} gets silently
         # truncated, so use an explicit if instead.
@@ -160,6 +164,7 @@ runs:
           --arg local_admin_username "$LOCAL_ADMIN_USERNAME" \
           --arg local_admin_password "$LOCAL_ADMIN_PASSWORD" \
           --argjson managed_image_tags "$MANAGED_IMAGE_TAGS_JSON" \
+          --arg boot_diag_storage_account "$BOOT_DIAG_STORAGE_ACCOUNT" \
           '{
             subscription_id: $subscription_id,
             location: $location,
@@ -187,5 +192,6 @@ runs:
             prepare_for_citrix_mcs: $prepare_for_citrix_mcs,
             local_admin_username: $local_admin_username,
             local_admin_password: $local_admin_password,
-            managed_image_tags: $managed_image_tags
+            managed_image_tags: $managed_image_tags,
+            boot_diag_storage_account: $boot_diag_storage_account
           }' > ci.auto.pkrvars.json

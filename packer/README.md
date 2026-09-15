@@ -16,6 +16,10 @@ walkthrough. In short:
   (variables are declared inline)
 - `images/win11-azure.pkrvars.hcl.example` - template of values to copy and
   fill in (Windows 11 is the only image built right now)
+- `images/files/unattend.xml` - Windows Setup answer file uploaded to the
+  build VM and passed to sysprep via `/unattend:` - suppresses OOBE's
+  interactive network/Microsoft-account/privacy screens on every machine
+  later created from the published image
 - `images/scripts/windows/` - VDA install / Citrix Optimizer / cleanup
   scripts
 

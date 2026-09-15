@@ -5,8 +5,20 @@ if (-not (Test-Path $sysprepPath)) {
     throw "Sysprep not found at $sysprepPath"
 }
 
-Write-Host "Starting sysprep generalization."
-Start-Process -FilePath $sysprepPath -ArgumentList "/oobe /generalize /quiet /quit" -Wait
+# Uploaded by the "file" provisioner in azure-windows-base.pkr.hcl, right
+# before this script runs. Passing it via /unattend: (rather than only
+# dropping it in C:\Windows\Panther\Unattend) is the documented sysprep
+# mechanism for persisting OOBE answer-file settings across generalize -
+# without it, machines later created from this image (including Citrix
+# MCS-provisioned VDAs) hang on OOBE's interactive network/Microsoft-account
+# screens instead of booting straight through to a usable login state.
+$unattendPath = "C:\Windows\Temp\unattend.xml"
+if (-not (Test-Path $unattendPath)) {
+    throw "Unattend answer file not found at $unattendPath - required to skip OOBE screens on machines created from this image."
+}
+
+Write-Host "Starting sysprep generalization with $unattendPath."
+Start-Process -FilePath $sysprepPath -ArgumentList "/oobe /generalize /quiet /quit /unattend:$unattendPath" -Wait
 
 $imageStateKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State"
 $desiredState = "IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE"

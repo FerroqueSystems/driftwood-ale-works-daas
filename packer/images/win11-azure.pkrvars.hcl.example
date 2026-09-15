@@ -58,3 +58,8 @@ managed_image_tags = {
   Role        = "golden-image"
   OS          = "windows-11"
 }
+
+# Reuses module.artifact_storage's existing storage account (see
+# modules/artifact-storage/README.md) to hold this build VM's boot
+# diagnostics (console screenshot + serial log). Leave empty to disable.
+boot_diag_storage_account = ""
