@@ -64,6 +64,16 @@ name: citrix-image-rotation
 # desktop name, restricted access, autoscale schedule) that isn't part of
 # the rotation state machine and has no other in-CI path to get applied.
 #
+# "apply" is the only job in this workflow that ever runs an untargeted
+# `terraform apply` on purpose. Every other job (build/cutover/decommission/
+# promote-to-test/promote-to-prod-and-drain) scopes its apply with -target
+# to exactly the citrix resources that job needs (the relevant image
+# version/machine catalog/delivery group/per-catalog resource group) -
+# domain controllers, Cloud Connectors, the runner, network, and identity
+# are provisioned once, out of band, and a routine image-rotation action
+# should never re-evaluate or touch them just because they happened to have
+# unrelated pending config drift sitting in the same Terraform state.
+#
 # This workflow needs the full non-secret environment config (everything in
 # terraform.tfvars.example) and the Packer build vars (everything in
 # packer/images/win11-azure.pkrvars.hcl.example) available in CI, since both
@@ -417,13 +427,22 @@ jobs:
 
       - *write_citrix_tfvars
 
+      # Scoped to just this environment's delivery group - a cutover only
+      # ever changes associated_machine_catalogs (drop the outgoing label,
+      # add the incoming one), never the machine catalogs themselves. An
+      # untargeted apply here would also re-evaluate every other resource in
+      # the environment (domain controllers, Cloud Connectors, the runner,
+      # network, identity) for any unrelated pending drift and apply that
+      # too - those are provisioned once, out of band, and should never be
+      # touched by a routine image-rotation action.
       - name: terraform apply
         working-directory: ${{ env.TF_WORKDIR }}
         env:
           CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
         run: |
           terraform init
-          terraform apply -auto-approve
+          terraform apply -auto-approve \
+            -target="module.citrix.citrix_delivery_group.vda[\"${{ inputs.environment }}\"]"
 
       - name: Check outstanding image labels
         run: python3 scripts/rotate_image_versions.py "$ROTATION_FILE" check-outstanding --threshold "$OUTSTANDING_IMAGE_LABEL_THRESHOLD"
@@ -479,13 +498,23 @@ jobs:
 
       - *write_citrix_tfvars
 
+      # Scoped to just this catalog build's own resources - the drained
+      # machine catalog, its dedicated resource group, and (harmless no-op
+      # unless no other environment still references this label - see
+      # still_referenced above) the shared image version. Same reasoning as
+      # cutover above: an untargeted apply would also sweep in any unrelated
+      # pending drift on domain controllers/Cloud Connectors/the runner/
+      # network/identity, which this job has no business touching.
       - name: terraform apply
         working-directory: ${{ env.TF_WORKDIR }}
         env:
           CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
         run: |
           terraform init
-          terraform apply -auto-approve
+          terraform apply -auto-approve \
+            -target="module.citrix.citrix_machine_catalog.vda[\"${{ inputs.environment }}-${{ inputs.image_label }}\"]" \
+            -target="module.citrix.azurerm_resource_group.vda[\"${{ inputs.environment }}-${{ inputs.image_label }}\"]" \
+            -target="module.citrix.citrix_image_version.vda[\"${{ inputs.image_label }}\"]"
 
       # citrix_image_version only wraps a *reference* to the Azure Compute
       # Gallery image version by pointer (gallery/definition/version) - it
@@ -670,18 +699,27 @@ jobs:
             git push
           fi
 
-      # Single untargeted apply is safe here - staging (machine_count = 0)
-      # and cutover (machine_count = N) both already happened in the JSON
-      # file above, before Terraform ever runs, so there's no observable
-      # intermediate state where a delivery group is asked to associate a
-      # catalog at machine_count = 0 (Citrix's actual rejection case).
+      # Scoped to just the new catalog's resources (created here for the
+      # first time - staging via the JSON file above doesn't touch Azure/
+      # Citrix) plus test's delivery group. Staging (machine_count = 0) and
+      # cutover (machine_count = N) both already happened in the JSON file
+      # above, before Terraform ever runs, so there's no observable
+      # intermediate state where the delivery group is asked to associate a
+      # catalog at machine_count = 0 (Citrix's actual rejection case). An
+      # untargeted apply would also sweep in any unrelated pending drift on
+      # domain controllers/Cloud Connectors/the runner/network/identity,
+      # which this job has no business touching - those are provisioned
+      # once, out of band.
       - name: terraform apply
         working-directory: ${{ env.TF_WORKDIR }}
         env:
           CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
         run: |
           terraform init
-          terraform apply -auto-approve
+          terraform apply -auto-approve \
+            -target="module.citrix.azurerm_resource_group.vda[\"test-${{ steps.source.outputs.label }}\"]" \
+            -target="module.citrix.citrix_machine_catalog.vda[\"test-${{ steps.source.outputs.label }}\"]" \
+            -target="module.citrix.citrix_delivery_group.vda[\"test\"]"
 
       - name: Check outstanding image labels
         run: python3 scripts/rotate_image_versions.py "$ROTATION_FILE" check-outstanding --threshold "$OUTSTANDING_IMAGE_LABEL_THRESHOLD"
@@ -756,13 +794,25 @@ jobs:
             git push
           fi
 
+      # Scoped the same way as promote-to-test above - the new catalog's
+      # resources (created here for the first time) plus prod's delivery
+      # group, nothing else. NOTE: the first time this ever runs, creating
+      # citrix_delivery_group.vda["prod"] may still fail even with this
+      # scoping - see the top-level README's status list. That's a
+      # pre-existing Citrix Cloud-side issue (a real "Machine is already
+      # allocated" error), not something -target papers over; it needs
+      # investigating directly in Citrix Cloud Studio before this job can
+      # succeed.
       - name: terraform apply
         working-directory: ${{ env.TF_WORKDIR }}
         env:
           CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
         run: |
           terraform init
-          terraform apply -auto-approve
+          terraform apply -auto-approve \
+            -target="module.citrix.azurerm_resource_group.vda[\"prod-${{ steps.source.outputs.label }}\"]" \
+            -target="module.citrix.citrix_machine_catalog.vda[\"prod-${{ steps.source.outputs.label }}\"]" \
+            -target="module.citrix.citrix_delivery_group.vda[\"prod\"]"
 
       # Retires the outgoing Prod catalog from serving traffic without
       # deleting anything - actual decommission is still the separate,
