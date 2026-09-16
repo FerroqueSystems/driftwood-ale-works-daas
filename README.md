@@ -122,9 +122,13 @@ infrastructure, it needs:
 - [ ] VDA installer + Citrix Optimizer download locations, and the
       version-matched scripts from `citrix-packer-tools` (see
       `packer/scripts/README.md`)
-- [ ] `environments/citrix-azure/rotation.auto.tfvars.json` is seeded with
-      demo machine counts (Dev 3, Test 5, Prod 20) - adjust if the real
-      numbers for the talk differ
+- [x] `environments/citrix-azure/rotation.auto.tfvars.json` is seeded with
+      demo machine counts (Dev 1, Test 3, Prod 5, resized down from the
+      original Dev 3/Test 5/Prod 20 on 2026-09-16) - the
+      `DEV_TOTAL_MACHINES`/`TEST_TOTAL_MACHINES`/`PROD_TOTAL_MACHINES`
+      GitHub variables that seed future `build`/promotion steps were
+      updated to match, so later rotations don't reset back to the old
+      counts
 - [ ] The GitHub repo secrets/variables listed below
 - [ ] Run `bootstrap-github-runner-commands.txt`'s one-time registration
       steps - this repo has no Bastion/VPN (nothing pre-exists in the Lab
