@@ -41,6 +41,11 @@ permissions:
 jobs:
   dry-run:
     runs-on: ubuntu-latest
+    # CITRIX_MAINTENANCE_CLIENT_ID/_SECRET are scoped to this environment
+    # specifically (not repo-level) - see README's secrets table - so this
+    # job needs to declare it to read them, even though the lookup target
+    # here is test's catalog, not prod's.
+    environment: citrix-cutover-approval-prod
     steps:
       - uses: actions/checkout@v4
 
