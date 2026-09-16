@@ -1,203 +1,77 @@
 name: one-off-import-prod-delivery-group
 
-# TEMPORARY, one-time-use workflow - delete this file once
-# module.citrix.citrix_delivery_group.vda["prod"] is successfully imported
-# and a follow-up scoped `terraform plan` for it comes back clean (or with
-# only expected/reviewed drift).
+# TEMPORARY, one-time-use workflow, repurposed 2026-09-16 - originally
+# imported module.citrix.citrix_delivery_group.vda["prod"] into Terraform
+# state (that import succeeded; see git history on this file for the
+# 4-attempt saga of getting the Citrix Orchestration API call right).
 #
-# Context: the "Driftwood Ale Works - Production" delivery group already
-# exists in Citrix Cloud (created out of band, never captured in Terraform
-# state - only its machine catalog was ever imported/created via Terraform).
-# Every citrix-image-rotation.yml apply that reached module.citrix's prod
-# delivery group tried to *create* it fresh and collided with the real
-# object: "Error Message : Machine is already allocated." This workflow
-# looks up that object's real Citrix Cloud ID via the same OAuth2
-# client-credentials flow scripts/citrix_daas_maintenance.py uses, then
-# imports it into state at the address the "prod" delivery group already
-# has in modules/citrix/main.tf - no config changes, no terraform apply.
+# Repurposed here as a READ-ONLY dry run for
+# scripts/citrix_daas_maintenance.py's `drain` command, ahead of rolling
+# 2609-2 to Prod: that script's own docstring flags its Machines
+# list/maintenance-mode/power-action endpoints as never verified against a
+# live Citrix Cloud tenant, and citrix-image-rotation.yml's
+# promote-to-prod-and-drain job calls its `drain` command directly against
+# real Prod machines. This imports the same script's functions and calls
+# only the read-only ones (get_token, resolve_catalog_id, list_machines,
+# get_session_count) against a real, safe, non-prod target - test's
+# already-drained-but-undecommissioned "driftwood-win11-test-2601-1"
+# catalog. Never calls set_maintenance_mode or power_off - zero mutation
+# risk.
+#
+# Kept at this file path (rather than a new file) because workflow_dispatch
+# only discovers workflow files that exist on the default branch (main) -
+# this path is already registered there from the original import use.
+# Dispatched with --ref release/1.0.0 to run this repurposed content
+# without needing another push to main (which would itself trigger
+# promote-to-prod-and-drain against real Prod, defeating the point of a
+# dry run). Delete this file (on both branches) once the real drain has
+# been validated against Prod.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      catalog_name:
+        description: "Machine catalog name to look up (read-only, no mutation)"
+        required: true
+        default: "driftwood-win11-test-2601-1"
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  import:
+  dry-run:
     runs-on: ubuntu-latest
-    environment: citrix-cutover-approval-prod
     steps:
       - uses: actions/checkout@v4
 
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.ARM_CLIENT_ID }}
-          tenant-id: ${{ secrets.ARM_TENANT_ID }}
-          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
-
-      - name: Write Terraform vars
-        uses: ./.github/actions/write-citrix-tfvars
-        with:
-          working_directory: environments/citrix-azure
-          location: ${{ vars.LOCATION }}
-          resource_group_name: ${{ vars.RESOURCE_GROUP_NAME }}
-          tags_json: ${{ vars.TAGS_JSON }}
-          enable_scheduled_shutdown: ${{ vars.ENABLE_SCHEDULED_SHUTDOWN }}
-          scheduled_shutdown_time: ${{ vars.SCHEDULED_SHUTDOWN_TIME }}
-          scheduled_shutdown_timezone: ${{ vars.SCHEDULED_SHUTDOWN_TIMEZONE }}
-          enable_boot_diagnostics: ${{ vars.ENABLE_BOOT_DIAGNOSTICS }}
-          vnet_name: ${{ vars.VNET_NAME }}
-          vnet_address_space_json: ${{ vars.VNET_ADDRESS_SPACE_JSON }}
-          vda_subnet_address_prefixes_json: ${{ vars.VDA_SUBNET_ADDRESS_PREFIXES_JSON }}
-          hosting_connection_app_name: ${{ vars.HOSTING_CONNECTION_APP_NAME }}
-          azure_subscription_id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          azure_tenant_id: ${{ secrets.ARM_TENANT_ID }}
-          citrix_customer_id: ${{ secrets.CITRIX_CUSTOMER_ID }}
-          citrix_client_id: ${{ secrets.CITRIX_CLIENT_ID }}
-          citrix_environment: ${{ vars.CITRIX_ENVIRONMENT }}
-          citrix_resource_location_name: ${{ vars.CITRIX_RESOURCE_LOCATION_NAME }}
-          citrix_admin_folder_name: ${{ vars.CITRIX_ADMIN_FOLDER_NAME }}
-          citrix_zone_description: ${{ vars.CITRIX_ZONE_DESCRIPTION }}
-          citrix_hypervisor_name: ${{ vars.CITRIX_HYPERVISOR_NAME }}
-          citrix_resource_pool_name: ${{ vars.CITRIX_RESOURCE_POOL_NAME }}
-          delivery_group_dev_config_json: ${{ vars.DELIVERY_GROUP_DEV_CONFIG_JSON }}
-          delivery_group_test_config_json: ${{ vars.DELIVERY_GROUP_TEST_CONFIG_JSON }}
-          delivery_group_prod_config_json: ${{ vars.DELIVERY_GROUP_PROD_CONFIG_JSON }}
-          citrix_allocation_type: ${{ vars.CITRIX_ALLOCATION_TYPE }}
-          citrix_vda_service_offering: ${{ vars.CITRIX_VDA_SERVICE_OFFERING }}
-          citrix_vda_storage_type: ${{ vars.CITRIX_VDA_STORAGE_TYPE }}
-          active_directory_domain_fqdn: ${{ vars.ACTIVE_DIRECTORY_DOMAIN_FQDN }}
-          active_directory_domain_netbios_name: ${{ vars.ACTIVE_DIRECTORY_DOMAIN_NETBIOS_NAME }}
-          active_directory_safe_mode_password: ${{ secrets.ACTIVE_DIRECTORY_SAFE_MODE_PASSWORD }}
-          active_directory_service_account_name: ${{ vars.ACTIVE_DIRECTORY_SERVICE_ACCOUNT_NAME }}
-          active_directory_service_account_password: ${{ secrets.ACTIVE_DIRECTORY_SERVICE_ACCOUNT_PASSWORD }}
-          active_directory_base_ou_name: ${{ vars.ACTIVE_DIRECTORY_BASE_OU_NAME }}
-          active_directory_vda_ou_name: ${{ vars.ACTIVE_DIRECTORY_VDA_OU_NAME }}
-          active_directory_connector_ou_name: ${{ vars.ACTIVE_DIRECTORY_CONNECTOR_OU_NAME }}
-          active_directory_dev_desktop_group_name: ${{ vars.ACTIVE_DIRECTORY_DEV_DESKTOP_GROUP_NAME }}
-          active_directory_test_desktop_group_name: ${{ vars.ACTIVE_DIRECTORY_TEST_DESKTOP_GROUP_NAME }}
-          active_directory_prod_desktop_group_name: ${{ vars.ACTIVE_DIRECTORY_PROD_DESKTOP_GROUP_NAME }}
-          domain_controller_admin_username: ${{ vars.DOMAIN_CONTROLLER_ADMIN_USERNAME }}
-          domain_controller_admin_password: ${{ secrets.DOMAIN_CONTROLLER_ADMIN_PASSWORD }}
-          domain_controller_scripts_storage_account_name: ${{ vars.DOMAIN_CONTROLLER_SCRIPTS_STORAGE_ACCOUNT_NAME }}
-          cloud_connector_admin_username: ${{ vars.CLOUD_CONNECTOR_ADMIN_USERNAME }}
-          cloud_connector_admin_password: ${{ secrets.CLOUD_CONNECTOR_ADMIN_PASSWORD }}
-          cloud_connector_client_id: ${{ secrets.CLOUD_CONNECTOR_CLIENT_ID }}
-          cloud_connector_client_secret: ${{ secrets.CLOUD_CONNECTOR_CLIENT_SECRET }}
-          cloud_connector_installer_url: ${{ secrets.CLOUD_CONNECTOR_INSTALLER_URL }}
-          cloud_connector_scripts_storage_account_name: ${{ vars.CLOUD_CONNECTOR_SCRIPTS_STORAGE_ACCOUNT_NAME }}
-          github_runner_name: ${{ vars.RUNNER_NAME }}
-          github_runner_vm_size: ${{ vars.RUNNER_VM_SIZE }}
-          github_runner_admin_username: ${{ vars.RUNNER_ADMIN_USERNAME }}
-          github_runner_admin_ssh_public_key: ${{ secrets.RUNNER_ADMIN_SSH_PUBLIC_KEY }}
-          enable_runner_temporary_ssh_access: ${{ vars.ENABLE_RUNNER_TEMPORARY_SSH_ACCESS }}
-          admin_source_ip_cidr: ${{ secrets.ADMIN_SOURCE_IP_CIDR }}
-          gallery_name: ${{ vars.GALLERY_NAME }}
-          image_definition_name: ${{ vars.IMAGE_DEFINITION_NAME }}
-          image_sku: ${{ vars.IMAGE_SKU }}
-          artifact_storage_account_name: ${{ vars.ARTIFACT_STORAGE_ACCOUNT_NAME }}
-          artifact_storage_container_name: ${{ vars.ARTIFACT_STORAGE_CONTAINER_NAME }}
-
-      - name: terraform init
-        working-directory: environments/citrix-azure
-        run: terraform init
-
-      # Attempt 6: the legacy /cvadapis/ surface 403'd for both the
-      # Terraform provider's client and the dedicated maintenance client
-      # (attempts 1/2, see git history on this file). Attempt 3 moved to the
-      # modern Orchestration API's DeliveryGroupsV2 resource (captured browser
-      # DevTools traffic from Web Studio itself shows it calls this, reachable
-      # through Citrix Cloud's public gateway at /cvad/manage/ rather than
-      # /cvadapis/) with citrix_client_id/CITRIX_CLIENT_SECRET (the same
-      # client the citrix/citrix Terraform provider itself uses). Attempt 4
-      # swapped Citrix-CustomerId for Citrix-InstanceId, since that's what the
-      # 400 complained was missing. Attempt 5 sent both headers, but with the
-      # same customer ID value under each - got HTTP 403 "Invalid Site Id in
-      # request Url". Per Citrix's own DaaS REST API docs
-      # (developer-docs.citrix.com/.../how-to-get-site-id.html),
-      # Citrix-InstanceId isn't the customer ID at all - it's a separate
-      # per-site GUID, fetched via GET /cvad/manage/me
-      # (Customers[0].Sites[0].Id) using only Citrix-CustomerId, *before* it's
-      # available to pass on subsequent calls.
-      - name: Look up the existing delivery group's real Citrix Cloud ID
-        id: lookup
-        working-directory: environments/citrix-azure
+      - name: Look up catalog and list machines (read-only)
         env:
-          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+          CITRIX_CUSTOMER_ID: ${{ secrets.CITRIX_CUSTOMER_ID }}
+          CITRIX_MAINTENANCE_CLIENT_ID: ${{ secrets.CITRIX_MAINTENANCE_CLIENT_ID }}
+          CITRIX_MAINTENANCE_CLIENT_SECRET: ${{ secrets.CITRIX_MAINTENANCE_CLIENT_SECRET }}
+          CATALOG_NAME: ${{ inputs.catalog_name }}
         run: |
           python3 - <<'PYEOF'
-          import json
           import os
-          import urllib.error
-          import urllib.request
+          import sys
 
-          cfg = json.load(open("ci.auto.tfvars.json"))
-          customer_id = cfg["citrix_customer_id"]
-          client_id = cfg["citrix_client_id"]
-          client_secret = os.environ["CITRIX_CLIENT_SECRET"]
-          target_name = "Driftwood Ale Works - Production"
+          sys.path.insert(0, "scripts")
+          from citrix_daas_maintenance import get_token, resolve_catalog_id, list_machines, get_session_count
 
-          def call(method, url, token=None, site_id=None, body=None):
-              data = body.encode("utf-8") if isinstance(body, str) else body
-              req = urllib.request.Request(url, data=data, method=method)
-              if token is None:
-                  req.add_header("Content-Type", "application/x-www-form-urlencoded")
-              else:
-                  req.add_header("Authorization", f"CwsAuth Bearer={token}")
-                  req.add_header("Accept", "application/json")
-                  req.add_header("Citrix-CustomerId", customer_id)
-                  # Only known once the "me" lookup below has run - the very
-                  # call that discovers it can't send it yet.
-                  if site_id:
-                      req.add_header("Citrix-InstanceId", site_id)
-              try:
-                  with urllib.request.urlopen(req, timeout=30) as resp:
-                      return json.loads(resp.read())
-              except urllib.error.HTTPError as e:
-                  detail = e.read().decode("utf-8", errors="replace")
-                  raise SystemExit(f"{method} {url} -> HTTP {e.code}: {detail}")
+          customer_id = os.environ["CITRIX_CUSTOMER_ID"]
+          client_id = os.environ["CITRIX_MAINTENANCE_CLIENT_ID"]
+          client_secret = os.environ["CITRIX_MAINTENANCE_CLIENT_SECRET"]
+          catalog_name = os.environ["CATALOG_NAME"]
 
-          token_url = f"https://api.cloud.com/cctrustoauth2/{customer_id}/tokens/clients"
-          token = call("POST", token_url, body=f"grant_type=client_credentials&client_id={client_id}&client_secret={client_secret}")["access_token"]
+          token = get_token(customer_id, client_id, client_secret)
+          print("Token acquired OK")
 
-          me = call("GET", "https://api.cloud.com/cvad/manage/me", token=token)
-          site_id = me["Customers"][0]["Sites"][0]["Id"]
-          print(f"Resolved site ID: {site_id}")
+          catalog_id = resolve_catalog_id(token, customer_id, catalog_name)
+          print(f"Resolved catalog {catalog_name!r} -> {catalog_id}")
 
-          list_url = f"https://api.cloud.com/cvad/manage/DeliveryGroupsV2?limit=250&fields=Id,Name"
-          groups = call("GET", list_url, token=token, site_id=site_id).get("Items", [])
-
-          print("Delivery groups found:")
-          for g in groups:
-              print(f"  {g.get('Name')!r} -> {g.get('Id')}")
-
-          match = next((g for g in groups if g.get("Name") == target_name), None)
-          if not match:
-              raise SystemExit(f"No delivery group named {target_name!r} found via the DaaS REST API")
-
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"id={match['Id']}\n")
+          machines = list_machines(token, customer_id, catalog_id)
+          print(f"Found {len(machines)} machine(s):")
+          for m in machines:
+              sessions = get_session_count(token, customer_id, m["Id"])
+              print(f"  {m.get('Name')} (id={m['Id']}) - {sessions} session(s), InMaintenanceMode={m.get('InMaintenanceMode')}")
           PYEOF
-
-      - name: terraform import
-        working-directory: environments/citrix-azure
-        env:
-          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
-        run: |
-          terraform import 'module.citrix.citrix_delivery_group.vda["prod"]' "${{ steps.lookup.outputs.id }}"
-
-      # Review-only - does NOT apply. Whatever drift shows up here (e.g.
-      # associated_machine_catalogs, desktops, autoscale_settings not
-      # matching the real object yet) needs a human look before running the
-      # normal apply/cutover actions again.
-      - name: terraform plan (review drift after import)
-        working-directory: environments/citrix-azure
-        env:
-          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
-        run: |
-          terraform plan -target='module.citrix.citrix_delivery_group.vda["prod"]' -no-color
