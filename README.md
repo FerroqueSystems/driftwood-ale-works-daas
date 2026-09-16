@@ -142,16 +142,18 @@ infrastructure, it needs:
       endpoints could not be confirmed against live API reference docs when
       this script was written; see the module docstring for exactly which
       calls are lower-confidence.
-- [ ] **`citrix_delivery_group.vda["prod"]` has never successfully been
-      created** - it's absent from Terraform state even though prod's
-      machine catalog already exists. Creating it fails with a Citrix Cloud
-      API error, `Error Message : Machine is already allocated.`,
-      discovered while cutting dev over to a new build
-      (2026-09-15). Needs investigating directly in Citrix Cloud Studio
-      (likely an existing delivery group or stale machine allocation
-      already claiming prod's catalog machines, out of band from Terraform
-      state) before `promote-to-prod-and-drain` or the manual `apply`
-      action can succeed.
+- [x] ~~`citrix_delivery_group.vda["prod"]` has never successfully been
+      created`~~ - resolved 2026-09-16: the real "Driftwood Ale Works -
+      Production" delivery group (created out of band, never captured in
+      Terraform state) was imported via the one-off
+      `one-off-import-prod-delivery-group.yml` workflow (delete that file
+      once the drift below is applied and a follow-up plan comes back
+      clean, per its own header comment). A scoped `terraform plan` for it
+      afterward shows real reconciliation drift - notably
+      `in_maintenance_mode = true -> false` (the real object is currently
+      in maintenance mode; Terraform's config never set this explicitly) -
+      reviewed but **not yet applied**; needs a deliberate `apply` action
+      run to actually reconcile it.
 
 Remote PC / app publishing beyond desktops aren't in scope yet.
 
