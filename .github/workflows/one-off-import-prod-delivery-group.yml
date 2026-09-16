@@ -61,7 +61,7 @@ jobs:
           import sys
 
           sys.path.insert(0, "scripts")
-          from citrix_daas_maintenance import get_token, resolve_catalog_id, list_machines, get_session_count
+          from citrix_daas_maintenance import get_token, get_site_id, resolve_catalog_id, list_machines, get_session_count
 
           customer_id = os.environ["CITRIX_CUSTOMER_ID"]
           client_id = os.environ["CITRIX_MAINTENANCE_CLIENT_ID"]
@@ -71,12 +71,15 @@ jobs:
           token = get_token(customer_id, client_id, client_secret)
           print("Token acquired OK")
 
-          catalog_id = resolve_catalog_id(token, customer_id, catalog_name)
+          site_id = get_site_id(token, customer_id)
+          print(f"Resolved site ID: {site_id}")
+
+          catalog_id = resolve_catalog_id(token, customer_id, site_id, catalog_name)
           print(f"Resolved catalog {catalog_name!r} -> {catalog_id}")
 
-          machines = list_machines(token, customer_id, catalog_id)
+          machines = list_machines(token, customer_id, site_id, catalog_id)
           print(f"Found {len(machines)} machine(s):")
           for m in machines:
-              sessions = get_session_count(token, customer_id, m["Id"])
+              sessions = get_session_count(token, customer_id, site_id, m["Id"])
               print(f"  {m.get('Name')} (id={m['Id']}) - {sessions} session(s), InMaintenanceMode={m.get('InMaintenanceMode')}")
           PYEOF

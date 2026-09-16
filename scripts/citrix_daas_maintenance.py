@@ -13,15 +13,21 @@ of this writing). The only whole-object option
 it would freeze the entire delivery group, including the machines just cut
 over to, not just the outgoing catalog's machines.
 
-IMPORTANT - lowest-confidence part of this repo's automation: the OAuth
-token endpoint (get_token) is a well-documented, standard Citrix Cloud flow
-and can be trusted. The Machines list/maintenance-mode/power-action
-endpoints (resolve_catalog_id, list_machines, set_maintenance_mode,
-power_off) could not be verified against live Citrix API reference docs in
-the session that wrote this script - treat their exact paths/payloads as
-best-available design, not confirmed fact, and validate against a real
-Citrix Cloud tenant (or at least a non-prod catalog) before trusting this
-against real production sessions.
+The OAuth token endpoint (get_token) is a well-documented, standard Citrix
+Cloud flow. get_site_id was added 2026-09-16 after a read-only dry run
+(resolve_catalog_id/list_machines only, against a real non-prod catalog -
+see one-off-import-prod-delivery-group.yml's git history) against this
+tenant found even the legacy /cvadapis/ surface rejects requests with
+"Invalid Site Id in request Url" unless Citrix-InstanceId (a per-site GUID,
+distinct from the customer ID) is also sent - the same fix already needed
+for /cvad/manage/ elsewhere in this repo. MEDIUM-LOW confidence remains on
+resolve_catalog_id/list_machines/set_maintenance_mode/power_off's exact
+path/payload shapes beyond that header fix - they could not be fully
+verified against live Citrix API reference docs, and set_maintenance_mode/
+power_off specifically have never been exercised against a real tenant at
+all (the dry run only covered the read-only calls). Validate those two
+against a non-prod catalog before trusting this against real production
+sessions.
 
 Uses a dedicated Citrix Cloud API client (CITRIX_MAINTENANCE_CLIENT_ID/
 CITRIX_MAINTENANCE_CLIENT_SECRET), deliberately separate from both the
@@ -47,7 +53,7 @@ import urllib.request
 API_BASE = "https://api.cloud.com"
 
 
-def _request(method, url, token=None, customer_id=None, body=None):
+def _request(method, url, token=None, customer_id=None, site_id=None, body=None):
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Accept", "application/json")
@@ -57,6 +63,8 @@ def _request(method, url, token=None, customer_id=None, body=None):
         req.add_header("Authorization", f"CwsAuth Bearer={token}")
     if customer_id:
         req.add_header("Citrix-CustomerId", customer_id)
+    if site_id:
+        req.add_header("Citrix-InstanceId", site_id)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             raw = resp.read()
@@ -84,41 +92,59 @@ def get_token(customer_id, client_id, client_secret):
     return result["access_token"]
 
 
-def resolve_catalog_id(token, customer_id, catalog_name):
+def get_site_id(token, customer_id):
+    """Resolves the per-site GUID Citrix Cloud requires as the
+    Citrix-InstanceId header on every other authenticated call in this
+    module - confirmed necessary even against the legacy /cvadapis/ surface
+    (not just /cvad/manage/), discovered via a read-only dry run against a
+    real, non-prod catalog (see one-off-import-prod-delivery-group.yml's
+    git history around 2026-09-16 for the equivalent discovery against
+    /cvad/manage/ - same fix, same underlying cause). Only needs
+    Citrix-CustomerId, since the site ID isn't known yet."""
+    result = _request("GET", f"{API_BASE}/cvad/manage/me", token, customer_id)
+    return result["Customers"][0]["Sites"][0]["Id"]
+
+
+def resolve_catalog_id(token, customer_id, site_id, catalog_name):
     """MEDIUM confidence on this endpoint's exact path/shape - verify against
     a live tenant before relying on it."""
-    result = _request("GET", f"{API_BASE}/cvadapis/{customer_id}/MachineCatalogs", token, customer_id)
+    result = _request(
+        "GET", f"{API_BASE}/cvadapis/{customer_id}/MachineCatalogs", token, customer_id, site_id
+    )
     for catalog in result.get("Items", []):
         if catalog.get("Name") == catalog_name:
             return catalog["Id"]
     sys.exit(f"Machine catalog '{catalog_name}' not found via the DaaS REST API")
 
 
-def list_machines(token, customer_id, catalog_id):
+def list_machines(token, customer_id, site_id, catalog_id):
     """LOW-MEDIUM confidence on the filter param name/shape - verify against
     the DaaS REST API reference before relying on it."""
     result = _request(
-        "GET", f"{API_BASE}/cvadapis/{customer_id}/Machines?catalog={catalog_id}", token, customer_id
+        "GET", f"{API_BASE}/cvadapis/{customer_id}/Machines?catalog={catalog_id}", token, customer_id, site_id
     )
     return result.get("Items", [])
 
 
-def set_maintenance_mode(token, customer_id, machine_id, enabled):
+def set_maintenance_mode(token, customer_id, site_id, machine_id, enabled):
     _request(
         "PATCH",
         f"{API_BASE}/cvadapis/{customer_id}/Machines/{machine_id}",
         token,
         customer_id,
+        site_id,
         body={"InMaintenanceMode": enabled},
     )
 
 
-def get_session_count(token, customer_id, machine_id):
-    result = _request("GET", f"{API_BASE}/cvadapis/{customer_id}/Machines/{machine_id}", token, customer_id)
+def get_session_count(token, customer_id, site_id, machine_id):
+    result = _request(
+        "GET", f"{API_BASE}/cvadapis/{customer_id}/Machines/{machine_id}", token, customer_id, site_id
+    )
     return result.get("SessionCount", 0)
 
 
-def power_off(token, customer_id, machine_id):
+def power_off(token, customer_id, site_id, machine_id):
     """LOW confidence - the least-verified call in this script. Uses
     Citrix's own power-action mechanism rather than stopping the Azure VM
     directly via `az vm deallocate`/Stop-AzVM, deliberately: this
@@ -130,6 +156,7 @@ def power_off(token, customer_id, machine_id):
         f"{API_BASE}/cvadapis/{customer_id}/Machines/{machine_id}/PowerAction",
         token,
         customer_id,
+        site_id,
         body={"Action": "Shutdown"},
     )
 
@@ -141,8 +168,9 @@ def cmd_drain(args):
         sys.exit("CITRIX_MAINTENANCE_CLIENT_ID and CITRIX_MAINTENANCE_CLIENT_SECRET must be set")
 
     token = get_token(args.customer_id, client_id, client_secret)
-    catalog_id = resolve_catalog_id(token, args.customer_id, args.catalog_name)
-    machines = list_machines(token, args.customer_id, catalog_id)
+    site_id = get_site_id(token, args.customer_id)
+    catalog_id = resolve_catalog_id(token, args.customer_id, site_id, args.catalog_name)
+    machines = list_machines(token, args.customer_id, site_id, catalog_id)
 
     if not machines:
         print(f"No machines found in catalog '{args.catalog_name}' - nothing to drain.")
@@ -151,7 +179,7 @@ def cmd_drain(args):
 
     print(f"Setting maintenance mode on {len(machines)} machine(s) in '{args.catalog_name}'...")
     for machine in machines:
-        set_maintenance_mode(token, args.customer_id, machine["Id"], True)
+        set_maintenance_mode(token, args.customer_id, site_id, machine["Id"], True)
 
     pending = {m["Id"]: m["Name"] for m in machines}
     drained = []
@@ -159,13 +187,14 @@ def cmd_drain(args):
     while pending and time.monotonic() < deadline:
         # Re-fetch a token each iteration - simplest way to avoid the ~1hr
         # token expiry edge case on a long-running drain, at the cost of a
-        # few extra HTTP calls.
+        # few extra HTTP calls. Site ID is stable for the tenant, no need to
+        # re-resolve it.
         token = get_token(args.customer_id, client_id, client_secret)
         for machine_id, name in list(pending.items()):
-            session_count = get_session_count(token, args.customer_id, machine_id)
+            session_count = get_session_count(token, args.customer_id, site_id, machine_id)
             if session_count == 0:
                 print(f"{name} has drained (0 sessions) - powering off.")
-                power_off(token, args.customer_id, machine_id)
+                power_off(token, args.customer_id, site_id, machine_id)
                 drained.append(name)
                 del pending[machine_id]
             else:
