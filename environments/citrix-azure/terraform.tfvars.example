@@ -94,15 +94,18 @@ delivery_groups = {
     catalog_name_prefix                   = "driftwood-win11-dev"
     machine_naming_scheme                 = "dw-dev-vda-##"
     # Dev is self-service and cost-sensitive - narrow weekday ramp, nothing
-    # powered on outside business hours or on weekends.
+    # powered on outside business hours or on weekends. 1 machine flat
+    # rather than a percentage - these environments are small enough that a
+    # percentage-of-total doesn't map cleanly to "how many should actually
+    # be on".
     power_time_schemes = [
       {
         days_of_week          = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
         display_name          = "Dev weekday hours"
-        peak_time_ranges      = ["08:00-18:00"]
-        pool_using_percentage = true
+        peak_time_ranges      = ["09:00-17:00"]
+        pool_using_percentage = false
         pool_size_schedules = [
-          { time_range = "08:00-18:00", pool_size = 50 },
+          { time_range = "09:00-17:00", pool_size = 1 },
         ]
       }
     ]
@@ -122,10 +125,10 @@ delivery_groups = {
       {
         days_of_week          = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
         display_name          = "QA weekday hours"
-        peak_time_ranges      = ["07:00-19:00"]
-        pool_using_percentage = true
+        peak_time_ranges      = ["09:00-17:00"]
+        pool_using_percentage = false
         pool_size_schedules = [
-          { time_range = "07:00-19:00", pool_size = 60 },
+          { time_range = "09:00-17:00", pool_size = 1 },
         ]
       }
     ]
@@ -136,7 +139,7 @@ delivery_groups = {
     published_desktop_name                = "Driftwood Ale Works Desktop"
     desktop_restricted_access_allow_list  = ["DRIFTWOOD\\Driftwood Prod Desktop Users"]
     autoscale_enabled                     = true
-    autoscale_timezone                    = "Central Standard Time"
+    autoscale_timezone                    = "Eastern Standard Time"
     catalog_name_prefix                   = "driftwood-win11-prod"
     machine_naming_scheme                 = "dw-prod-vda-##"
     # This is a temporary demo environment (torn down after the
@@ -147,12 +150,11 @@ delivery_groups = {
     power_time_schemes = [
       {
         days_of_week          = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-        display_name          = "Prod weekday business hours - Central"
-        peak_time_ranges      = ["08:00-17:00"]
-        pool_using_percentage = true
+        display_name          = "Prod weekday business hours - Eastern"
+        peak_time_ranges      = ["09:00-17:00"]
+        pool_using_percentage = false
         pool_size_schedules = [
-          { time_range = "08:00-10:00", pool_size = 20 },
-          { time_range = "10:00-17:00", pool_size = 10 },
+          { time_range = "09:00-17:00", pool_size = 1 },
         ]
       }
     ]
