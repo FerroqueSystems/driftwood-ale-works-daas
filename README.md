@@ -140,24 +140,28 @@ infrastructure, it needs:
       `modules/domain-controllers/README.md`'s "Automation, and its real
       risk" section. This is scripted end-to-end with no manual fallback and
       hasn't been exercised against real Azure/Citrix Cloud from this repo.
-- [ ] **Verify `scripts/citrix_daas_maintenance.py`'s Citrix DaaS REST API
-      calls against a real tenant** (or at least a non-prod catalog) before
-      the conference - the maintenance-mode/list-machines/power-action
-      endpoints could not be confirmed against live API reference docs when
-      this script was written; see the module docstring for exactly which
-      calls are lower-confidence.
+- [ ] **`scripts/citrix_daas_maintenance.py`'s `list_machines` ignores its
+      `?catalog=` filter** - discovered 2026-09-16 via a read-only dry run
+      (see `one-off-import-prod-delivery-group.yml`'s git history): it
+      returns every machine on the whole Citrix Cloud site, not just the
+      target catalog's, including other environments/customers sharing this
+      tenant. `promote-to-prod-and-drain`'s drain step is **temporarily
+      disabled** in `citrix-image-rotation.yml` because of this - draining
+      for real would call `set_maintenance_mode`/`power_off` against any
+      0-session machine site-wide. Needs the correct filter param/endpoint
+      (confirmed against Citrix's own API reference, not another guess)
+      before re-enabling; drain the outgoing Prod catalog manually in
+      Citrix Cloud Studio until then. `resolve_catalog_id`/`get_session_count`
+      and the new `get_site_id` were validated by that same dry run and are
+      fine; `set_maintenance_mode`/`power_off` remain fully unverified
+      against a real tenant on top of the filter bug.
 - [x] ~~`citrix_delivery_group.vda["prod"]` has never successfully been
       created`~~ - resolved 2026-09-16: the real "Driftwood Ale Works -
       Production" delivery group (created out of band, never captured in
       Terraform state) was imported via the one-off
-      `one-off-import-prod-delivery-group.yml` workflow (delete that file
-      once the drift below is applied and a follow-up plan comes back
-      clean, per its own header comment). A scoped `terraform plan` for it
-      afterward shows real reconciliation drift - notably
-      `in_maintenance_mode = true -> false` (the real object is currently
-      in maintenance mode; Terraform's config never set this explicitly) -
-      reviewed but **not yet applied**; needs a deliberate `apply` action
-      run to actually reconcile it.
+      `one-off-import-prod-delivery-group.yml` workflow, then reconciled
+      (`in_maintenance_mode`, folder path, autoscale schedule, desktop
+      access list casing) via a full `apply`.
 
 Remote PC / app publishing beyond desktops aren't in scope yet.
 
