@@ -107,16 +107,18 @@ jobs:
         working-directory: environments/citrix-azure
         run: terraform init
 
-      # Attempt 4: the legacy /cvadapis/ surface 403'd for both the
+      # Attempt 5: the legacy /cvadapis/ surface 403'd for both the
       # Terraform provider's client and the dedicated maintenance client
       # (attempts 1/2, see git history on this file). Attempt 3 moved to the
       # modern Orchestration API's DeliveryGroupsV2 resource (captured browser
       # DevTools traffic from Web Studio itself shows it calls this, reachable
       # through Citrix Cloud's public gateway at /cvad/manage/ rather than
       # /cvadapis/) with citrix_client_id/CITRIX_CLIENT_SECRET (the same
-      # client the citrix/citrix Terraform provider itself uses) - but 400'd,
-      # "Missing required header" / "Citrix-InstanceId": /cvad/manage/ wants
-      # that header instead of /cvadapis/'s Citrix-CustomerId. Fixed below.
+      # client the citrix/citrix Terraform provider itself uses). Attempt 4
+      # swapped Citrix-CustomerId for Citrix-InstanceId, since that's what the
+      # 400 complained was missing - but /cvad/manage/ turns out to want both
+      # headers together (same customer ID value under each name), not one
+      # instead of the other. Fixed below.
       - name: Look up the existing delivery group's real Citrix Cloud ID
         id: lookup
         working-directory: environments/citrix-azure
@@ -141,10 +143,12 @@ jobs:
               if token:
                   req.add_header("Authorization", f"CwsAuth Bearer={token}")
                   # /cvad/manage/ (the modern Orchestration API surface) wants
-                  # Citrix-InstanceId, not the legacy /cvadapis/ header
-                  # Citrix-CustomerId - attempt 3 (see git history) 400'd with
-                  # "Missing required header" / "Citrix-InstanceId" until this
-                  # was added.
+                  # BOTH headers, not one instead of the other as attempts 3/4
+                  # each assumed: dropping Citrix-CustomerId in favor of
+                  # Citrix-InstanceId alone (attempt 4) 400'd complaining
+                  # Citrix-CustomerId was now the one missing - same value,
+                  # both header names required together.
+                  req.add_header("Citrix-CustomerId", customer_id)
                   req.add_header("Citrix-InstanceId", customer_id)
                   req.add_header("Accept", "application/json")
               else:
