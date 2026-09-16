@@ -18,9 +18,11 @@ Cloud flow. get_site_id was added 2026-09-16 after a read-only dry run
 (resolve_catalog_id/list_machines only, against a real non-prod catalog -
 see one-off-import-prod-delivery-group.yml's git history) against this
 tenant found even the legacy /cvadapis/ surface rejects requests with
-"Invalid Site Id in request Url" unless Citrix-InstanceId (a per-site GUID,
-distinct from the customer ID) is also sent - the same fix already needed
-for /cvad/manage/ elsewhere in this repo. MEDIUM-LOW confidence remains on
+"Invalid Site Id in request Url" - it turned out to mean literally that:
+/cvadapis/{id}/... needs the per-site GUID in that URL segment, not the
+customer ID (adding the Citrix-InstanceId header alone wasn't enough, since
+the customer ID was still sitting in the path). Both the header and the
+corrected path are kept together now. MEDIUM-LOW confidence remains on
 resolve_catalog_id/list_machines/set_maintenance_mode/power_off's exact
 path/payload shapes beyond that header fix - they could not be fully
 verified against live Citrix API reference docs, and set_maintenance_mode/
@@ -109,7 +111,7 @@ def resolve_catalog_id(token, customer_id, site_id, catalog_name):
     """MEDIUM confidence on this endpoint's exact path/shape - verify against
     a live tenant before relying on it."""
     result = _request(
-        "GET", f"{API_BASE}/cvadapis/{customer_id}/MachineCatalogs", token, customer_id, site_id
+        "GET", f"{API_BASE}/cvadapis/{site_id}/MachineCatalogs", token, customer_id, site_id
     )
     for catalog in result.get("Items", []):
         if catalog.get("Name") == catalog_name:
@@ -121,7 +123,7 @@ def list_machines(token, customer_id, site_id, catalog_id):
     """LOW-MEDIUM confidence on the filter param name/shape - verify against
     the DaaS REST API reference before relying on it."""
     result = _request(
-        "GET", f"{API_BASE}/cvadapis/{customer_id}/Machines?catalog={catalog_id}", token, customer_id, site_id
+        "GET", f"{API_BASE}/cvadapis/{site_id}/Machines?catalog={catalog_id}", token, customer_id, site_id
     )
     return result.get("Items", [])
 
@@ -129,7 +131,7 @@ def list_machines(token, customer_id, site_id, catalog_id):
 def set_maintenance_mode(token, customer_id, site_id, machine_id, enabled):
     _request(
         "PATCH",
-        f"{API_BASE}/cvadapis/{customer_id}/Machines/{machine_id}",
+        f"{API_BASE}/cvadapis/{site_id}/Machines/{machine_id}",
         token,
         customer_id,
         site_id,
@@ -139,7 +141,7 @@ def set_maintenance_mode(token, customer_id, site_id, machine_id, enabled):
 
 def get_session_count(token, customer_id, site_id, machine_id):
     result = _request(
-        "GET", f"{API_BASE}/cvadapis/{customer_id}/Machines/{machine_id}", token, customer_id, site_id
+        "GET", f"{API_BASE}/cvadapis/{site_id}/Machines/{machine_id}", token, customer_id, site_id
     )
     return result.get("SessionCount", 0)
 
@@ -153,7 +155,7 @@ def power_off(token, customer_id, site_id, machine_id):
     a VM that was stopped out-of-band instead of through the broker."""
     _request(
         "POST",
-        f"{API_BASE}/cvadapis/{customer_id}/Machines/{machine_id}/PowerAction",
+        f"{API_BASE}/cvadapis/{site_id}/Machines/{machine_id}/PowerAction",
         token,
         customer_id,
         site_id,
