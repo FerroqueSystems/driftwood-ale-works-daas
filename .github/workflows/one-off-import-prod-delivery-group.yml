@@ -107,7 +107,7 @@ jobs:
         working-directory: environments/citrix-azure
         run: terraform init
 
-      # Attempt 5: the legacy /cvadapis/ surface 403'd for both the
+      # Attempt 6: the legacy /cvadapis/ surface 403'd for both the
       # Terraform provider's client and the dedicated maintenance client
       # (attempts 1/2, see git history on this file). Attempt 3 moved to the
       # modern Orchestration API's DeliveryGroupsV2 resource (captured browser
@@ -116,9 +116,14 @@ jobs:
       # /cvadapis/) with citrix_client_id/CITRIX_CLIENT_SECRET (the same
       # client the citrix/citrix Terraform provider itself uses). Attempt 4
       # swapped Citrix-CustomerId for Citrix-InstanceId, since that's what the
-      # 400 complained was missing - but /cvad/manage/ turns out to want both
-      # headers together (same customer ID value under each name), not one
-      # instead of the other. Fixed below.
+      # 400 complained was missing. Attempt 5 sent both headers, but with the
+      # same customer ID value under each - got HTTP 403 "Invalid Site Id in
+      # request Url". Per Citrix's own DaaS REST API docs
+      # (developer-docs.citrix.com/.../how-to-get-site-id.html),
+      # Citrix-InstanceId isn't the customer ID at all - it's a separate
+      # per-site GUID, fetched via GET /cvad/manage/me
+      # (Customers[0].Sites[0].Id) using only Citrix-CustomerId, *before* it's
+      # available to pass on subsequent calls.
       - name: Look up the existing delivery group's real Citrix Cloud ID
         id: lookup
         working-directory: environments/citrix-azure
@@ -137,22 +142,19 @@ jobs:
           client_secret = os.environ["CITRIX_CLIENT_SECRET"]
           target_name = "Driftwood Ale Works - Production"
 
-          def call(method, url, token=None, body=None):
+          def call(method, url, token=None, site_id=None, body=None):
               data = body.encode("utf-8") if isinstance(body, str) else body
               req = urllib.request.Request(url, data=data, method=method)
-              if token:
-                  req.add_header("Authorization", f"CwsAuth Bearer={token}")
-                  # /cvad/manage/ (the modern Orchestration API surface) wants
-                  # BOTH headers, not one instead of the other as attempts 3/4
-                  # each assumed: dropping Citrix-CustomerId in favor of
-                  # Citrix-InstanceId alone (attempt 4) 400'd complaining
-                  # Citrix-CustomerId was now the one missing - same value,
-                  # both header names required together.
-                  req.add_header("Citrix-CustomerId", customer_id)
-                  req.add_header("Citrix-InstanceId", customer_id)
-                  req.add_header("Accept", "application/json")
-              else:
+              if token is None:
                   req.add_header("Content-Type", "application/x-www-form-urlencoded")
+              else:
+                  req.add_header("Authorization", f"CwsAuth Bearer={token}")
+                  req.add_header("Accept", "application/json")
+                  req.add_header("Citrix-CustomerId", customer_id)
+                  # Only known once the "me" lookup below has run - the very
+                  # call that discovers it can't send it yet.
+                  if site_id:
+                      req.add_header("Citrix-InstanceId", site_id)
               try:
                   with urllib.request.urlopen(req, timeout=30) as resp:
                       return json.loads(resp.read())
@@ -163,8 +165,12 @@ jobs:
           token_url = f"https://api.cloud.com/cctrustoauth2/{customer_id}/tokens/clients"
           token = call("POST", token_url, body=f"grant_type=client_credentials&client_id={client_id}&client_secret={client_secret}")["access_token"]
 
+          me = call("GET", "https://api.cloud.com/cvad/manage/me", token=token)
+          site_id = me["Customers"][0]["Sites"][0]["Id"]
+          print(f"Resolved site ID: {site_id}")
+
           list_url = f"https://api.cloud.com/cvad/manage/DeliveryGroupsV2?limit=250&fields=Id,Name"
-          groups = call("GET", list_url, token=token).get("Items", [])
+          groups = call("GET", list_url, token=token, site_id=site_id).get("Items", [])
 
           print("Delivery groups found:")
           for g in groups:
