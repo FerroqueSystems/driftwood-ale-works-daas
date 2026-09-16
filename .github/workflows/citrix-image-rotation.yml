@@ -20,6 +20,9 @@ name: citrix-image-rotation
 #   power off - see scripts/citrix_daas_maintenance.py) rather than
 #   deleting it. Actual decommission of a drained catalog stays a separate,
 #   later, manual step (below) - this only retires it from serving traffic.
+#   DRAIN STEP TEMPORARILY DISABLED (2026-09-16, see that job's drain step
+#   for why) - cutover still runs automatically, but the outgoing catalog
+#   needs draining by hand in Citrix Cloud Studio until re-enabled.
 # - workflow_dispatch actions (build/cutover/decommission/apply) remain for
 #   manual, out-of-band operations - e.g. rebuilding one environment
 #   in isolation, or the two-phase "stage now, cut over later" flow that
@@ -823,9 +826,21 @@ jobs:
       # Bounded wait: whatever drains within the timeout gets powered off;
       # anything still occupied is left running, untouched, for manual
       # follow-up - this never forces a user's session closed.
+      # TEMPORARILY DISABLED 2026-09-16 - a read-only dry run (see
+      # one-off-import-prod-delivery-group.yml's git history) found
+      # citrix_daas_maintenance.py's list_machines returns every machine on
+      # the whole Citrix Cloud site, not just the target catalog's - its
+      # `?catalog=` filter doesn't actually filter. Draining for real right
+      # now would call set_maintenance_mode/power_off against every
+      # 0-session machine site-wide, including this environment's own Prod
+      # machines and other unrelated environments/customers sharing this
+      # tenant. Re-enable only once list_machines is fixed (correct filter
+      # param/endpoint, confirmed against Citrix's own API reference) and
+      # re-validated with another dry run. Until then, drain the outgoing
+      # catalog manually in Citrix Cloud Studio.
       - name: Drain and power off the outgoing prod catalog's machines
         id: drain
-        if: steps.outgoing.outputs.label != ''
+        if: false && steps.outgoing.outputs.label != ''
         env:
           CITRIX_MAINTENANCE_CLIENT_ID: ${{ secrets.CITRIX_MAINTENANCE_CLIENT_ID }}
           CITRIX_MAINTENANCE_CLIENT_SECRET: ${{ secrets.CITRIX_MAINTENANCE_CLIENT_SECRET }}
