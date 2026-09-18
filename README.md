@@ -162,6 +162,42 @@ infrastructure, it needs:
       `one-off-import-prod-delivery-group.yml` workflow, then reconciled
       (`in_maintenance_mode`, folder path, autoscale schedule, desktop
       access list casing) via a full `apply`.
+- [ ] **VDAs never registered with Citrix Cloud** - discovered 2026-09-18
+      while cutting Dev over to `2609-3`: newly-provisioned VDAs booted fine
+      (reached the Windows login screen per boot diagnostics) but sat as
+      "Unregistered" in Citrix DaaS indefinitely, and Citrix's own
+      auto-recovery eventually tore down and recreated the affected machine.
+      Root cause: `CITRIX_VDA_INSTALLER_ARGS` never passed `/controllers`,
+      so newly-built VDAs had no `ListOfDDCs` registry entry and no way to
+      discover this environment's two Cloud Connectors
+      (`dw-cc-0.driftwood.local`/`dw-cc-1.driftwood.local`) - `packer/images/README.md`
+      previously (incorrectly) documented that `/controllers` wasn't needed
+      here, left over from an earlier Entra ID/Rendezvous-only design (see
+      "Architecture decisions" above). Fixed by adding `/controllers
+      "dw-cc-0.driftwood.local dw-cc-1.driftwood.local"` to
+      `CITRIX_VDA_INSTALLER_ARGS` and correcting `packer/images/README.md` -
+      requires a new golden image build (`2609-4`) to take effect; every VDA
+      built from `2609-2`/`2609-3` still lacks this.
+- [ ] **`citrix-image-rotation.yml`'s "decommission" action can permanently
+      orphan an Azure Compute Gallery image version if run on diverged
+      branches** - discovered 2026-09-18 while investigating leftover image
+      versions in `rg-driftwood-citrix-daas`. `daw-win11-vda/2601.1.0` is
+      still sitting in the gallery even though every environment
+      decommissioned label `2601-1` and the rotation state confirms none
+      still reference it. Root cause: Test's decommission ran on `main`
+      (commit `af5902a`) and Prod's ran independently on `release/1.0.0`
+      (commit `67f9c1d`) before those branches were merged - each run's
+      `still_referenced` check only sees its own branch's copy of
+      `rotation.auto.tfvars.json`, so Prod's run still saw Test's
+      now-stale reference and skipped the `az sig image-version delete`
+      call. The later merge commit (`9107efc`) reconciled the JSON but
+      never re-triggers that delete step, so the image version is now
+      unreachable by any automated path. Needs either a periodic reconcile
+      job (diff the gallery's actual versions against what
+      `rotation.auto.tfvars.json` on `main` claims, per environment) or a
+      rule to only ever decommission a shared label from one branch at a
+      time; until then, check for this manually after any decommission that
+      overlaps a not-yet-merged branch.
 
 Remote PC / app publishing beyond desktops aren't in scope yet.
 
