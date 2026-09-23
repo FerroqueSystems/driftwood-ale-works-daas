@@ -162,22 +162,37 @@ infrastructure, it needs:
       `one-off-import-prod-delivery-group.yml` workflow, then reconciled
       (`in_maintenance_mode`, folder path, autoscale schedule, desktop
       access list casing) via a full `apply`.
-- [ ] **VDAs never registered with Citrix Cloud** - discovered 2026-09-18
+- [x] ~~VDAs never registered with Citrix Cloud~~ - discovered 2026-09-18
       while cutting Dev over to `2609-3`: newly-provisioned VDAs booted fine
       (reached the Windows login screen per boot diagnostics) but sat as
       "Unregistered" in Citrix DaaS indefinitely, and Citrix's own
       auto-recovery eventually tore down and recreated the affected machine.
-      Root cause: `CITRIX_VDA_INSTALLER_ARGS` never passed `/controllers`,
-      so newly-built VDAs had no `ListOfDDCs` registry entry and no way to
-      discover this environment's two Cloud Connectors
-      (`dw-cc-0.driftwood.local`/`dw-cc-1.driftwood.local`) - `packer/images/README.md`
-      previously (incorrectly) documented that `/controllers` wasn't needed
-      here, left over from an earlier Entra ID/Rendezvous-only design (see
-      "Architecture decisions" above). Fixed by adding `/controllers
-      "dw-cc-0.driftwood.local dw-cc-1.driftwood.local"` to
-      `CITRIX_VDA_INSTALLER_ARGS` and correcting `packer/images/README.md` -
-      requires a new golden image build (`2609-4`) to take effect; every VDA
-      built from `2609-2`/`2609-3` still lacks this.
+      Two stacked causes, found and fixed in sequence:
+      1. `CITRIX_VDA_INSTALLER_ARGS` never passed `/controllers`, so
+         newly-built VDAs had no `ListOfDDCs` registry entry and no way to
+         discover this environment's two Cloud Connectors
+         (`dw-cc-0.driftwood.local`/`dw-cc-1.driftwood.local`) -
+         `packer/images/README.md` previously (incorrectly) documented that
+         `/controllers` wasn't needed here, left over from an earlier Entra
+         ID/Rendezvous-only design (see "Architecture decisions" above).
+         Fixed by adding `/controllers "dw-cc-0.driftwood.local
+         dw-cc-1.driftwood.local"` to `CITRIX_VDA_INSTALLER_ARGS` and
+         correcting `packer/images/README.md` (image `2609-4`).
+      2. Even with `ListOfDDCs` populated, registration still failed with
+         "Test call from Cloud Connector to VDA failed" - Windows Defender
+         Firewall was blocking the Cloud Connector's inbound registration
+         call on port 80. Disabling only the Domain profile didn't help,
+         since a freshly cloned/deployed VM can still be classified
+         Public/Private before domain trust/NLA resolves. Fixed (demo-only -
+         see "Status/next steps" caveat below) by disabling Windows Defender
+         Firewall across all profiles in both
+         `packer/images/scripts/windows/prepare-citrix-master-image.ps1`
+         (baked into the golden image, needs a new build - `2609-5`+ - to
+         take effect) and
+         `modules/cloud-connectors/scripts/install-cloud-connector.ps1`
+         (takes effect on next Cloud Connector redeploy). **Needs real
+         firewall rules instead of a blanket disable before any production
+         use.**
 - [ ] **`citrix-image-rotation.yml`'s "decommission" action can permanently
       orphan an Azure Compute Gallery image version if run on diverged
       branches** - discovered 2026-09-18 while investigating leftover image
