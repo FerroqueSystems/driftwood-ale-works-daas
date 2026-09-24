@@ -83,14 +83,18 @@ Sources:
 - Shared computer activation: https://learn.microsoft.com/deployoffice/overview-shared-computer-activation
 
 For Citrix images, add the VDA installer explicitly as well. This repo's
-environment uses Citrix Cloud + MCS provisioning with no on-prem Cloud
-Connectors, so `/controllers` isn't needed at install time - MCS injects
-registration details per-VM automatically:
+environment uses traditional on-prem AD + two Cloud Connectors (see the
+top-level README's "Architecture decisions"), so `/controllers` **is**
+needed at install time - pass the Cloud Connectors' FQDNs so the installer
+populates `ListOfDDCs` in the registry. Without it, VDAs on an
+`identity_type = "ActiveDirectory"` catalog have no reliable way to
+discover the Cloud Connectors and register (a real bug this repo hit -
+see the top-level README's "Status / next steps"):
 
 ```hcl
 install_citrix_vda        = true
 citrix_vda_installer_url  = "https://<your-storage-or-artifact-location>/VDAWorkstationSetup_2402.exe"
-citrix_vda_installer_args = "/quiet /noreboot /mastermcsimage /enable_hdx_ports /includeadditional \"Citrix MCS IODriver\""
+citrix_vda_installer_args = "/quiet /noreboot /mastermcsimage /enable_hdx_ports /includeadditional \"Citrix MCS IODriver\" /controllers \"cc-0.yourdomain.local cc-1.yourdomain.local\""
 ```
 
 And add Citrix Optimizer from blob storage if desired:

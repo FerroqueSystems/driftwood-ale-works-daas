@@ -22,6 +22,16 @@ param(
 $ErrorActionPreference = "Stop"
 Start-Transcript -Path "C:\Windows\Temp\install-cloud-connector.log" -Append
 
+# Demo environment only - firewalling isn't a concern here, and Windows
+# Defender Firewall blocking inbound VDA registration traffic (port 80) on
+# a Domain-only profile isn't enough, since a freshly deployed VM can still
+# be classified Public/Private before domain trust/NLA resolves. Runs
+# unconditionally (ahead of the idempotency check below) so it's
+# re-enforced on every extension re-run. Revisit with real firewall rules
+# instead of a blanket disable before any production use.
+Write-Host "Disabling Windows Defender Firewall (all profiles) for this demo environment."
+Set-NetFirewallProfile -All -Enabled False
+
 $markerPath = "C:\Windows\Temp\cloud-connector-installed.marker"
 $installRoot = "C:\Windows\Temp\CloudConnectorInstall"
 
