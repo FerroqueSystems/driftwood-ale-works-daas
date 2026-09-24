@@ -163,6 +163,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: ./.github/actions/require-branch-contains-main
+
       - uses: azure/login@v2
         with:
           client-id: ${{ secrets.ARM_CLIENT_ID }}
@@ -397,6 +399,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: ./.github/actions/require-branch-contains-main
+
       - name: Cut the delivery group over to the new catalog
         run: |
           python3 scripts/rotate_image_versions.py "$ROTATION_FILE" cutover \
@@ -456,6 +460,8 @@ jobs:
     environment: citrix-decommission-approval-${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/require-branch-contains-main
 
       - name: Remove the drained catalog/image version from this environment's rotation state
         id: decommission
@@ -566,6 +572,8 @@ jobs:
     environment: citrix-cutover-approval-prod
     steps:
       - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/require-branch-contains-main
 
       - uses: azure/login@v2
         with:

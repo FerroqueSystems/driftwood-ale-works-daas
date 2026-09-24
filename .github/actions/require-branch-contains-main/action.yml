@@ -1,0 +1,29 @@
+name: Require branch to contain main
+description: >
+  Fails the job unless the checked-out commit already contains origin/main.
+  rotation.auto.tfvars.json is committed per branch, but every branch
+  applies against the same Terraform state - so a branch that hasn't picked
+  up main's latest promotions/decommissions will plan to roll Test/Prod back
+  to whatever stale labels its own copy still lists (and destroy the live
+  ones). Discovered 2026-09-24 when a 2609-6 build dispatched on a stale
+  release/1.0.0 tried to recreate test/prod-2609-2 and destroy the live
+  test/prod-2609-5 resource groups. Merge (or rebase onto) main first, then
+  re-run.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        # actions/checkout defaults to a depth-1 clone, which merge-base
+        # can't walk - deepen it along with fetching main.
+        if [ -f "$(git rev-parse --git-dir)/shallow" ]; then
+          git fetch --no-tags --quiet --unshallow origin +refs/heads/main:refs/remotes/origin/main
+        else
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+        fi
+        if ! git merge-base --is-ancestor origin/main HEAD; then
+          echo "::error::${GITHUB_REF_NAME} does not contain origin/main ($(git rev-parse --short origin/main)). Its rotation.auto.tfvars.json may be stale relative to the shared Terraform state - merge main into this branch first, then re-run."
+          exit 1
+        fi
+        echo "${GITHUB_REF_NAME} contains origin/main ($(git rev-parse --short origin/main))."
