@@ -212,7 +212,30 @@ infrastructure, it needs:
       `rotation.auto.tfvars.json` on `main` claims, per environment) or a
       rule to only ever decommission a shared label from one branch at a
       time; until then, check for this manually after any decommission that
-      overlaps a not-yet-merged branch.
+      overlaps a not-yet-merged branch. *Update 2026-09-24:* the
+      `2601.1.0` gallery version has since been removed, and the matching
+      orphaned `citrix_image_version.vda["2601-1"]` left in Terraform state
+      is destroyed by the next full `apply` from an up-to-date branch. The
+      `require-branch-contains-main` guard (below) also blocks the
+      diverged-branch half of this, though not two concurrent branches that
+      both contain `main`.
+- [x] **Manual rotation actions dispatched on a branch behind `main` roll
+      Test/Prod back to stale labels** - discovered 2026-09-24 when a
+      `2609-6` build dispatched on `release/1.0.0` (which never received
+      `main`'s 2609-5 promotions to Test/Prod) planned to recreate
+      `rg-vda-test/prod-2609-2` and destroy the live
+      `rg-vda-test/prod-2609-5` resource groups. Terraform state is shared
+      across branches but `rotation.auto.tfvars.json` isn't, and the build
+      job's `-target` on a single catalog still pulls in every
+      `azurerm_resource_group.vda` instance. The destroys failed before
+      anything live was removed, and the stray empty 2609-2 resource
+      groups are removed by the next full `apply`. Fixed by
+      [`.github/actions/require-branch-contains-main`](.github/actions/require-branch-contains-main/action.yml),
+      which the `build`/`cutover`/`decommission`/`plan` jobs now run right
+      after checkout: they fail immediately unless the branch already
+      contains `origin/main`. `release/1.0.0` was closed (tagged `v1.0.0`)
+      and work continues on `release/1.1.0`, cut from `develop` after it
+      was fast-forwarded to `main`.
 
 Remote PC / app publishing beyond desktops aren't in scope yet.
 
