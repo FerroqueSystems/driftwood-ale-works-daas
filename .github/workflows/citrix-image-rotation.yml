@@ -636,20 +636,36 @@ jobs:
           terraform apply tfplan
 
   # Full teardown of everything in this Terraform state (Azure + Citrix
-  # Cloud) between demos - same plan-then-apply-the-saved-plan split and
-  # citrix-cutover-approval-prod gate as "apply" above, so the reviewer sees
-  # the full destroy plan before approving the second prompt. Out of scope
-  # (bootstrapped outside Terraform, so they survive and the next
-  # from-scratch apply works): the rg-driftwood-tfstate backend and the
-  # GitHub OIDC app registration behind ARM_CLIENT_ID.
+  # Cloud) between demos, in two phases. Every change goes through a saved
+  # plan the reviewer sees before approving the job that applies it - four
+  # citrix-cutover-approval-prod prompts in all: plan 1, apply 1, plan 2,
+  # apply 2. Out of scope (bootstrapped outside Terraform, so they survive
+  # and the next from-scratch apply works): the rg-driftwood-tfstate backend
+  # and the GitHub OIDC app registration behind ARM_CLIENT_ID.
   #
   # Start the DCs and Cloud Connectors first (auto-shutdown deallocates
   # them): Citrix deletes MCS machine catalogs - VMs plus their AD computer
   # accounts - through the connectors, so destroying catalogs fails if
-  # they're offline. The destroy-only provider override below lets the VDA
-  # resource groups go even if MCS leaves untracked disks/NICs behind in
-  # them (azurerm otherwise refuses to delete a non-empty resource group).
-  destroy-plan:
+  # they're offline. That's also why there are two phases - a single
+  # untargeted destroy has no edge ordering catalogs before connector VMs
+  # (see the depends_on note on module.citrix in main.tf for why that edge
+  # can't exist), so it could delete the connectors mid-catalog-delete.
+  #
+  # Phase 1 is a normal (not -destroy) plan with catalog_rotation and
+  # delivery_groups emptied, targeted at the catalogs, delivery groups and
+  # the resource location. That one saved plan both deletes the catalogs/
+  # delivery groups and sets force_delete = true on the resource location
+  # in place - the provider refuses to even *plan* deleting a resource
+  # location that still lists connectors unless force_delete is already in
+  # state, and a -destroy plan can't also carry that update.
+  #
+  # Phase 2 is a plain plan -destroy of everything left.
+  #
+  # Destroy-only overrides (written at runtime, gitignored *_override.tf):
+  # azurerm may delete non-empty resource groups (in case MCS leaves
+  # untracked disks/NICs behind in the VDA resource groups), and the
+  # resource location's force_delete above.
+  destroy-phase1-plan:
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
     runs-on: ubuntu-latest
     environment: citrix-cutover-approval-prod
@@ -658,20 +674,22 @@ jobs:
 
       - uses: ./.github/actions/require-branch-contains-main
 
-      - uses: azure/login@v2
+      - &destroy_azure_login
+        uses: azure/login@v2
         with:
           client-id: ${{ secrets.ARM_CLIENT_ID }}
           tenant-id: ${{ secrets.ARM_TENANT_ID }}
           subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - &destroy_setup_terraform
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
 
       - *write_citrix_tfvars
 
       - &write_destroy_override
-        name: Allow deleting non-empty resource groups (destroy only)
+        name: Write destroy-only overrides
         working-directory: ${{ env.TF_WORKDIR }}
         run: |
           cat > destroy_override.tf <<'HCL'
@@ -683,8 +701,78 @@ jobs:
             }
           }
           HCL
+          cat > ../../modules/citrix/destroy_override.tf <<'HCL'
+          resource "citrix_cloud_resource_location" "this" {
+            force_delete = true
+          }
+          HCL
 
-      - name: terraform plan -destroy
+      - name: "terraform plan (phase 1: delete catalogs + delivery groups, set force_delete)"
+        working-directory: ${{ env.TF_WORKDIR }}
+        env:
+          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+        run: |
+          terraform init
+          terraform plan -out=tfplan \
+            -var 'catalog_rotation={}' \
+            -var 'delivery_groups={}' \
+            -target=module.citrix.citrix_delivery_group.vda \
+            -target=module.citrix.citrix_machine_catalog.vda \
+            -target=module.citrix.citrix_cloud_resource_location.this
+          terraform show -no-color tfplan
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-destroy-phase1
+          path: ${{ env.TF_WORKDIR }}/tfplan
+          retention-days: 1
+
+  destroy-phase1:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
+    needs: destroy-phase1-plan
+    runs-on: ubuntu-latest
+    environment: citrix-cutover-approval-prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - *destroy_azure_login
+
+      - *destroy_setup_terraform
+
+      - *write_citrix_tfvars
+
+      - *write_destroy_override
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan-destroy-phase1
+          path: ${{ env.TF_WORKDIR }}
+
+      - name: terraform apply (the phase 1 plan reviewed in "destroy-phase1-plan")
+        working-directory: ${{ env.TF_WORKDIR }}
+        env:
+          CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+        run: |
+          terraform init
+          terraform apply tfplan
+
+  destroy-phase2-plan:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
+    needs: destroy-phase1
+    runs-on: ubuntu-latest
+    environment: citrix-cutover-approval-prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - *destroy_azure_login
+
+      - *destroy_setup_terraform
+
+      - *write_citrix_tfvars
+
+      - *write_destroy_override
+
+      - name: "terraform plan -destroy (phase 2: everything else)"
         working-directory: ${{ env.TF_WORKDIR }}
         env:
           CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
@@ -695,27 +783,21 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: tfplan-destroy
+          name: tfplan-destroy-phase2
           path: ${{ env.TF_WORKDIR }}/tfplan
           retention-days: 1
 
-  destroy:
+  destroy-phase2:
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
-    needs: destroy-plan
+    needs: destroy-phase2-plan
     runs-on: ubuntu-latest
     environment: citrix-cutover-approval-prod
     steps:
       - uses: actions/checkout@v4
 
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.ARM_CLIENT_ID }}
-          tenant-id: ${{ secrets.ARM_TENANT_ID }}
-          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      - *destroy_azure_login
 
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
+      - *destroy_setup_terraform
 
       - *write_citrix_tfvars
 
@@ -723,10 +805,10 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: tfplan-destroy
+          name: tfplan-destroy-phase2
           path: ${{ env.TF_WORKDIR }}
 
-      - name: terraform apply (the destroy plan reviewed in "destroy-plan" above)
+      - name: terraform apply (the phase 2 plan reviewed in "destroy-phase2-plan")
         working-directory: ${{ env.TF_WORKDIR }}
         env:
           CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
