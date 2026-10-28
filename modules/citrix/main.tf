@@ -202,7 +202,17 @@ resource "citrix_machine_catalog" "vda" {
 }
 
 resource "citrix_delivery_group" "vda" {
-  for_each = var.delivery_groups
+  # Only environments with at least one catalog to associate - Citrix rejects
+  # a delivery group with no associated_machine_catalogs unless
+  # session_support/sharing_kind are set, and the provider says to set those
+  # *only* in that case, so they'd flip back to null at the first cutover.
+  # Instead an empty environment (e.g. right after a teardown, before its
+  # first build) just has no delivery group yet; the first cutover/promote's
+  # targeted apply creates it with its catalog already attached.
+  for_each = {
+    for env, dg in var.delivery_groups : env => dg
+    if anytrue([for v in values(local.flattened_catalogs) : v.env == env && v.machine_count > 0])
+  }
 
   name                       = each.value.name
   delivery_group_folder_path = citrix_admin_folder.this.path
