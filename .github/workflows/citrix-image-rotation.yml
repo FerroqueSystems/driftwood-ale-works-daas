@@ -125,6 +125,12 @@ on:
       machine_count:
         description: "cutover only: number of machines to assign to the new catalog in the delivery group"
         required: false
+      destroy_scope:
+        description: 'destroy only: "keep-domain-controllers" tears down everything except the AD domain controllers and what they need (resource group, network incl. NAT gateway, DC scripts storage) plus artifact storage (installers); "everything" removes the whole Terraform state.'
+        required: false
+        type: choice
+        options: [keep-domain-controllers, everything]
+        default: keep-domain-controllers
   push:
     branches:
       - develop
@@ -659,7 +665,18 @@ jobs:
   # location that still lists connectors unless force_delete is already in
   # state, and a -destroy plan can't also carry that update.
   #
-  # Phase 2 is a plain plan -destroy of everything left.
+  # Phase 2 is a plan -destroy of everything left - or, with destroy_scope
+  # "keep-domain-controllers" (the default), of everything left EXCEPT the
+  # addresses matching KEEP_DC_REGEX below: the DCs, the resource group and
+  # network they live in (NAT gateway included, so run-command and Windows
+  # activation still work when they're started), and artifact storage, so
+  # the installer SAS URLs in GitHub Secrets stay valid for the next rebuild
+  # (deleting it on 2026-10-06 forced a re-upload + secret reset). Terraform
+  # has no -exclude, so the plan -targets every other address in state,
+  # then refuses to continue if the saved plan would still delete anything
+  # in the keep set. Phase 2 also deletes the Packer-published gallery image
+  # versions (not Terraform-managed) right before its apply, since Azure
+  # refuses to delete an image definition/gallery that still has versions.
   #
   # Destroy-only overrides (written at runtime, gitignored *_override.tf):
   # azurerm may delete non-empty resource groups (in case MCS leaves
@@ -772,13 +789,35 @@ jobs:
 
       - *write_destroy_override
 
-      - name: "terraform plan -destroy (phase 2: everything else)"
+      - name: "terraform plan -destroy (phase 2: everything else, per destroy_scope)"
         working-directory: ${{ env.TF_WORKDIR }}
         env:
           CITRIX_CLIENT_SECRET: ${{ secrets.CITRIX_CLIENT_SECRET }}
+          DESTROY_SCOPE: ${{ inputs.destroy_scope || 'keep-domain-controllers' }}
+          KEEP_DC_REGEX: '^(azurerm_resource_group\.this$|module\.domain_controllers\.|module\.network\.|module\.artifact_storage\.)'
         run: |
+          set -euo pipefail
           terraform init
-          terraform plan -destroy -out=tfplan
+          if [ "$DESTROY_SCOPE" = "everything" ]; then
+            terraform plan -destroy -out=tfplan
+          else
+            # An array, not an unquoted string: addresses like
+            # vda["dev-2611-3"] contain [] and would otherwise be globbed.
+            mapfile -t addrs < <(terraform state list | grep -v -E '(^|\.)data\.' | grep -v -E "$KEEP_DC_REGEX" || true)
+            if [ "${#addrs[@]}" -eq 0 ]; then
+              echo "::error::Nothing left to destroy outside the keep-domain-controllers set."
+              exit 1
+            fi
+            echo "Destroy targets:"; printf '  %s\n' "${addrs[@]}"
+            terraform plan -destroy -out=tfplan "${addrs[@]/#/-target=}"
+            # Guard: a targeted destroy also removes anything that depends
+            # on a target - make sure none of that lands in the keep set.
+            doomed=$(terraform show -json tfplan | jq -r '.resource_changes[] | select(.change.actions | index("delete")) | .address')
+            if echo "$doomed" | grep -E "$KEEP_DC_REGEX"; then
+              echo "::error::The phase 2 plan would delete the resources above, which keep-domain-controllers must keep. Aborting."
+              exit 1
+            fi
+          fi
           terraform show -no-color tfplan
 
       - uses: actions/upload-artifact@v4
@@ -807,6 +846,27 @@ jobs:
         with:
           name: tfplan-destroy-phase2
           path: ${{ env.TF_WORKDIR }}
+
+      # Packer publishes gallery image versions directly, outside Terraform,
+      # and Azure won't delete an image definition (or the gallery) that
+      # still has versions - so clear them out first, but only when the
+      # reviewed plan actually deletes the image definition.
+      - name: Delete Packer-published gallery image versions (if the gallery is being destroyed)
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: |
+          set -euo pipefail
+          terraform init -input=false >/dev/null
+          if terraform show -json tfplan | jq -e '.resource_changes[] | select(.address == "module.image_gallery.azurerm_shared_image.vda" and (.change.actions | index("delete")))' >/dev/null; then
+            rg=$(jq -r .resource_group_name ci.auto.tfvars.json)
+            gallery=$(jq -r .gallery_name ci.auto.tfvars.json)
+            definition=$(jq -r .image_definition_name ci.auto.tfvars.json)
+            for v in $(az sig image-version list -g "$rg" -r "$gallery" -i "$definition" --query "[].name" -o tsv); do
+              echo "Deleting gallery image version $v"
+              az sig image-version delete -g "$rg" -r "$gallery" -i "$definition" -e "$v"
+            done
+          else
+            echo "Image definition is not being destroyed - leaving gallery image versions alone."
+          fi
 
       - name: terraform apply (the phase 2 plan reviewed in "destroy-phase2-plan")
         working-directory: ${{ env.TF_WORKDIR }}
